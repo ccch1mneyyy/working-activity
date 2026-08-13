@@ -3,19 +3,21 @@
     "target": "es2024",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "lib": ["ES2024"],
+    "lib": ["ES2024", "DOM"],
+    "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "declaration": true,
     "declarationMap": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "strict": true,
-    "types": ["node"],
+    "types": [],
     "rootDir": "src",
     "outDir": "lib/types",
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "exactOptionalPropertyTypes": false
   },
-  "include": ["src"],
-  "exclude": ["src/client"]
+  "include": ["src/client"]
 }

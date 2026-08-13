@@ -1,15 +1,15 @@
 diff --git a/packages/client/runtime/src/client/index.ts b/packages/client/runtime/src/client/index.ts
-index 0a384ff..8c73abb 100644
+index b5433bb..ca1076a 100644
 --- a/packages/client/runtime/src/client/index.ts
 +++ b/packages/client/runtime/src/client/index.ts
-@@ -50,6 +50,7 @@ export type {
-   RunningToolCall,
-   SteeringMessageNode, TodoItem, ToolResultNode, TurnErrorNode, UnknownSurfaceNode, UserMessageNode,
+@@ -80,6 +80,7 @@ export type {
+   SteeringMessageNode, TodoItem, ToolCallBlock, ToolResultNode, TurnErrorNode, TurnMaxTokensNode,
+   UnknownSurfaceNode, UserMessageNode,
  } from './sessions/conversation.ts'
 +export type { ActivityStatusView } from './sessions/activity.ts'
- export type {
-   ConversationContext, ConversationContextOriginKind,
- } from './sessions/conversation-context.ts'
+ export {
+   EMPTY_CHAT_SNAPSHOT, EMPTY_CONVERSATION_VIEWS, toAssistantBlock, toAssistantBlocks,
+ } from './sessions/conversation.ts'
 diff --git a/packages/client/runtime/src/client/sessions/activity.ts b/packages/client/runtime/src/client/sessions/activity.ts
 new file mode 100644
 index 0000000..42a1a98
@@ -80,21 +80,21 @@ index 0000000..42a1a98
 +  return view
 +}
 diff --git a/packages/client/runtime/src/client/sessions/conversation.ts b/packages/client/runtime/src/client/sessions/conversation.ts
-index c4e195b..680f112 100644
+index 698d8ab..6059724 100644
 --- a/packages/client/runtime/src/client/sessions/conversation.ts
 +++ b/packages/client/runtime/src/client/sessions/conversation.ts
-@@ -12,6 +12,7 @@ import type {
-   InboxItemId, RpcError, SessionId, SubagentAddress, ToolCallView, ToolResultView,
- } from '@deepseek-ai/dsh-client-connection/client'
+@@ -15,6 +15,7 @@ import type {
+   RpcError, SessionId, SubagentAddress, ToolCallView, ToolResultView,
+ } from '@deepseek-ai/dsh-api-remotes/client'
  import type { PendingInteraction } from './pending.ts'
 +import type { ActivityStatusView } from './activity.ts'
- export type { TodoItem }
- 
- /** Request configuration recorded for one provider call. */
-@@ -344,6 +345,12 @@ export interface ConversationSnapshot {
-    * unrelated snapshot swaps (memo premise, same regime as `nodes`).
-    */
-   codeDispatches: ReadonlyMap<string, readonly CodeSubCall[]>
+ import type { ContextProvenanceView, KnownContextForm } from './context-provenance.ts'
+ import type {
+   ChatConversationViewNode, ConversationTimelineSnapshot, ConversationViewSnapshotStore,
+@@ -444,6 +445,12 @@ export interface ConversationSnapshot {
+   turnEnds: ReadonlyMap<number, number>
+   partial: PartialAssistant | null
+   runningCalls: readonly RunningToolCall[]
 +  /**
 +   * Latest validated `activity/status` snapshot (the working-activity plugin's
 +   * live working line), or null before the first publish. Window rebuilds
@@ -105,71 +105,97 @@ index c4e195b..680f112 100644
    /** Authoritative transient inbox snapshot, including queued and steering placements. */
    queue: readonly QueuedMessage[]
 diff --git a/packages/client/runtime/src/client/sessions/session.ts b/packages/client/runtime/src/client/sessions/session.ts
-index d99a5e4..016cb3e 100644
+index 3e5ec5a..da255c2 100644
 --- a/packages/client/runtime/src/client/sessions/session.ts
 +++ b/packages/client/runtime/src/client/sessions/session.ts
-@@ -19,6 +19,8 @@ import type {
+@@ -21,6 +21,8 @@ import { EMPTY_CHAT_SNAPSHOT } from './conversation.ts'
  import type { PendingInteraction } from './pending.ts'
  import { PendingWait } from './pending.ts'
- import { TranscriptAdapter } from './transcript-adapter.ts'
+ import { Notifier } from './notifier.ts'
 +import { parseActivityStatusData } from './activity.ts'
 +import type { ActivityStatusView } from './activity.ts'
- import { displayFailureMessage } from './failure-display.ts'
- import { Notifier } from './notifier.ts'
- import { isVisibleAssistantChunk, PartialAccumulator } from './partial.ts'
-@@ -132,6 +134,8 @@ export class Session implements SessionFace {
-   private codeDispatches = new Map<string, readonly CodeSubCall[]>()
-   private dispatchesRev = 0
-   private dispatchesCache: { rev: number; value: ReadonlyMap<string, readonly CodeSubCall[]> } | null = null
+ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+ import type { SessionRemotes } from './remotes.ts'
+ import { ProjectionValueStore } from './projection-store.ts'
+@@ -101,6 +103,8 @@ export class Session implements SessionFace {
+   private removed = false
+   private promptError: PromptError | null = null
+   private lastAgentError: string | null = null
 +  /** Latest validated `activity/status` snapshot (working-activity plugin), or null. */
 +  private activityStatus: ActivityStatusView | null = null
-   private running = false
-   private address: SubagentAddress | undefined
-   private parentAvailable = false
-@@ -724,6 +728,22 @@ export class Session implements SessionFace {
-    *  chunk/retry projection and openCalls add-remove. */
-   private applyEventSideEffects(event: SessionEvent, view?: ToolEventView): void {
-     const eventType = event.type as string
-+    // The `activity/status` type is declared by the host-side
-+    // dsh-working-activity plugin whose types cannot enter the client program
-+    // (its host Context merges collide with the client's), so this wire
-+    // consumer narrows it structurally — the same posture as every other
-+    // cross-wire event payload. Live events update the snapshot; window
-+    // rebuilds replay the same handler, so the latest in-window snapshot is
-+    // restored on paging/stitching exactly like `codeDispatches`.
-+    if (eventType === 'activity/status') {
-+      const data = parseActivityStatusData(event.data)
-+      if (data === null) {
-+        console.error(`[web-runtime] ignored malformed activity/status event at seq ${event.seq}`)
-+        return
-+      }
-+      this.activityStatus = data
-+      return
-+    }
-     if (eventType === 'llm/retry') {
-       const data = parseRetryEventData(event.data)
-       if (data === null) {
-@@ -940,6 +960,7 @@ export class Session implements SessionFace {
-     this.turnEndsRev++
-     this.codeDispatches = new Map()
-     this.dispatchesRev++
+   /** Live events buffered during open/resync and stitched by sequence once history lands. */
+   private liveBuffer: { event: SessionEvent; view: ToolEventView | undefined }[] = []
+   /** Gap repair in flight; live events detour to the buffer until the tail page lands. */
+@@ -427,6 +431,7 @@ export class Session implements SessionFace {
+     this.events = []
+     this.views = []
+     this.baseSeq = 0
 +    this.activityStatus = null
-     for (let i = 0; i < this.events.length; i++) {
-       const event = this.events[i]
-       /* v8 ignore next -- dense-array guard: i stays within events.length, so the undefined arm needs a sparse array no caller builds. */
-@@ -995,6 +1016,7 @@ export class Session implements SessionFace {
-       pending: this.pendingCache.value,
-       codeDispatches: this.dispatchesCache.value,
-       queue: this.queueCache.value,
+     // Superseded, not settled: the baseline replay re-sends still-pending requested frames verbatim
+     // (same rpcId), re-minting fresh waits; a stale reference's respond() still reaches the host.
+     this.pending.clear()
+@@ -655,6 +660,12 @@ export class Session implements SessionFace {
+     this.views = entries.map(e => e.view)
+     this.baseSeq = this.events[0]?.seq ?? 0
+     this.hasMore = hasMore
++    // Replay the window's activity frames: the latest in-window snapshot is
++    // restored on paging/stitching exactly like the conversation rebuild below
++    // (live frames already applied via appendLive stay idempotent — last frame
++    // wins with identical data).
++    this.activityStatus = null
++    for (const event of this.events) this.applyActivityEvent(event)
+     if (this.events.some(event => event.type === 'turn/start')) this.firstPromptPendingTurn = false
+     this.conversation.replaceWindow(entries.map(conversationInput), hasMore)
+     if (projections !== undefined) this.projections.seed(projections)
+@@ -670,12 +681,35 @@ export class Session implements SessionFace {
+     if (tailSeq !== null && event.seq <= tailSeq) return 'none' // replay overlap, drop
+     this.events.push(event)
+     this.views.push(view)
++    if (this.applyActivityEvent(event)) this.notifier.markDirty()
+     if (event.type === 'turn/start') this.firstPromptPendingTurn = false
+     const queueChanged = this.queueMirror.acceptDurable(event)
+     const publication = this.conversation.append({ event, view })
+     return queueChanged ? 'immediate' : publication
+   }
+ 
++  /**
++   * Apply one `activity/status` wire frame: last frame wins; malformed frames
++   * are ignored without disturbing the snapshot. The event type is declared by
++   * the host-side dsh-working-activity plugin whose types cannot enter the
++   * client program (its host Context merges collide with the client's), so
++   * this wire consumer narrows it structurally — the same posture as every
++   * other cross-wire event payload.
++   * @param event - the incoming session event.
++   * @returns whether the snapshot changed (caller schedules a republish).
++   */
++  private applyActivityEvent(event: SessionEvent): boolean {
++    if ((event.type as string) !== 'activity/status') return false
++    const data = parseActivityStatusData(event.data)
++    if (data === null) {
++      console.error(`[web-runtime] ignored malformed activity/status event at seq ${event.seq}`)
++      return false
++    }
++    if (this.activityStatus === data) return false
++    this.activityStatus = data
++    return true
++  }
++
+   /** Land a live session/event (open/repair in flight -> buffer; overlapping seq -> drop;
+    *  a seq gap -> buffer + tail-page repull instead of appending a hole (a gap is an
+    *  expected reconnect-window artifact, repaired by refetch). The window stays one contiguous
+@@ -743,6 +777,7 @@ export class Session implements SessionFace {
+       turnEnds: legacy.turnEnds,
+       partial: legacy.partial,
+       runningCalls: legacy.runningCalls,
 +      activity: this.activityStatus,
+       pending: this.pendingCache.value,
+       queue: this.queueMirror.snapshot(),
        running: this.running,
-       subagent: this.address === undefined
-         ? null
-diff --git a/packages/client/runtime/tests/activity.spec.ts b/packages/client/runtime/tests/activity.spec.ts
+diff --git a/packages/client/runtime/tests/activity.client.spec.ts b/packages/client/runtime/tests/activity.client.spec.ts
 new file mode 100644
-index 0000000..70314cb
+index 0000000..37a9377
 --- /dev/null
-+++ b/packages/client/runtime/tests/activity.spec.ts
++++ b/packages/client/runtime/tests/activity.client.spec.ts
 @@ -0,0 +1,107 @@
 +/**
 + * Activity-status wire handling: payload narrowing plus Session snapshot
@@ -182,8 +208,8 @@ index 0000000..70314cb
 +import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
 +import { Session } from '../src/client/sessions/session.ts'
 +import { parseActivityStatusData } from '../src/client/sessions/activity.ts'
-+import { FakeApiClient, ok } from './fake-api.ts'
-+import { entries } from './event-script.ts'
++import { FakeApiClient, fakeRemote, ok } from './fake-api.client.ts'
++import { entries } from './event-script.client.ts'
 +
 +const SID = 'fk-activity' as SessionId
 +
@@ -236,7 +262,7 @@ index 0000000..70314cb
 +  async function opened(history: SessionEvent[]): Promise<Session> {
 +    const api = new FakeApiClient()
 +    api.onHistory = () => Promise.resolve(ok({ events: entries(history) as never[], hasMore: false }))
-+    const session = new Session(SID, api)
++    const session = new Session(SID, api, fakeRemote())
 +    await session.open()
 +    return session
 +  }
@@ -278,11 +304,206 @@ index 0000000..70314cb
 +    expect(session.getSnapshot().activity).toMatchObject({ phase: 'thinking', line: '嗯…让我捋捋 · 总5s' })
 +  })
 +})
-diff --git a/packages/client/test-runtime/src/fixtures.ts b/packages/client/test-runtime/src/fixtures.ts
-index 9cf0251..31a496d 100644
---- a/packages/client/test-runtime/src/fixtures.ts
-+++ b/packages/client/test-runtime/src/fixtures.ts
-@@ -63,7 +63,7 @@ export function conversationSnapshot(sessionId: SessionId): ConversationSnapshot
+diff --git a/packages/client/ui-conversation/tests/chat-stats.client.spec.tsx b/packages/client/ui-conversation/tests/chat-stats.client.spec.tsx
+index 4ace851..ab920f8 100644
+--- a/packages/client/ui-conversation/tests/chat-stats.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/chat-stats.client.spec.tsx
+@@ -47,7 +47,7 @@ function snapshotBase(): ConversationSnapshot {
+     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: chatSnapshotFixture(),
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: false, composerPhase: 'active', removed: false, openState: 'open', openError: null,
+-    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
++    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   }
+ }
+ 
+diff --git a/packages/client/ui-conversation/tests/chat-view.client.spec.tsx b/packages/client/ui-conversation/tests/chat-view.client.spec.tsx
+index 360b589..925ac1a 100644
+--- a/packages/client/ui-conversation/tests/chat-view.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/chat-view.client.spec.tsx
+@@ -52,7 +52,7 @@ function snapshotBase(): ConversationSnapshot {
+     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: chatSnapshotFixture(), nodes: [],
+     turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: false, composerPhase: 'active', removed: false, openState: 'open', openError: null,
+-    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
++    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   }
+ }
+ 
+diff --git a/packages/client/ui-conversation/tests/gate-branch-tails.client.spec.tsx b/packages/client/ui-conversation/tests/gate-branch-tails.client.spec.tsx
+index 588ca52..d177671 100644
+--- a/packages/client/ui-conversation/tests/gate-branch-tails.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/gate-branch-tails.client.spec.tsx
+@@ -53,7 +53,7 @@ function snapshotBase(): ConversationSnapshot {
+     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: EMPTY_CHAT_SNAPSHOT,
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: false, composerPhase: 'active', removed: false, openState: 'open', openError: null,
+-    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
++    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   }
+ }
+ 
+diff --git a/packages/client/ui-conversation/tests/input-bar.client.spec.tsx b/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
+index 94354bd..9a4e108 100644
+--- a/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
+@@ -43,7 +43,7 @@ function snapshotOf(overrides: Partial<ConversationSnapshot> = {}): Conversation
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+     openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-    promptError: null, blank: false, subagent: null, lastAgentError: null,
++    promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+     ...overrides,
+   }
+ }
+diff --git a/packages/client/ui-conversation/tests/input-matrix.client.spec.tsx b/packages/client/ui-conversation/tests/input-matrix.client.spec.tsx
+index 9518318..8264500 100644
+--- a/packages/client/ui-conversation/tests/input-matrix.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/input-matrix.client.spec.tsx
+@@ -32,7 +32,7 @@ function mountBar(shell: SessionInputShell, over?: { running?: boolean; disabled
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: over?.running ?? false, composerPhase: 'active',
+     removed: over?.disabled ?? false, openState: 'open', openError: null, hasMore: false,
+-    loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
++    loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   })
+   const props: InputBarProps = {
+     sessionId: SID,
+diff --git a/packages/client/ui-conversation/tests/input-scenarios.client.spec.tsx b/packages/client/ui-conversation/tests/input-scenarios.client.spec.tsx
+index 8f72841..e3c46d3 100644
+--- a/packages/client/ui-conversation/tests/input-scenarios.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/input-scenarios.client.spec.tsx
+@@ -118,7 +118,7 @@ async function scopedBench(register?: (inputTriggers: InputTriggerService) => vo
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+     openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-    promptError: null, blank: false, subagent: null, lastAgentError: null,
++    promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   })
+   const barProps: InputBarProps = {
+     sessionId,
+diff --git a/packages/client/ui-conversation/tests/queue-dock.client.spec.tsx b/packages/client/ui-conversation/tests/queue-dock.client.spec.tsx
+index 4367a74..c3e6f39 100644
+--- a/packages/client/ui-conversation/tests/queue-dock.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/queue-dock.client.spec.tsx
+@@ -38,7 +38,7 @@ function snapshotWith(queue: QueuedMessage[]): ConversationSnapshot {
+     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: EMPTY_CHAT_SNAPSHOT,
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue, running: true, composerPhase: 'active', removed: false, openState: 'open', openError: null,
+-    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
++    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   }
+ }
+ 
+diff --git a/packages/client/ui-conversation/tests/skeleton.client.spec.tsx b/packages/client/ui-conversation/tests/skeleton.client.spec.tsx
+index acf618f..19ccf03 100644
+--- a/packages/client/ui-conversation/tests/skeleton.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/skeleton.client.spec.tsx
+@@ -77,7 +77,7 @@ function conversationSnapshot(overrides: Partial<ConversationSnapshot> = {}): Co
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+     openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-    promptError: null, blank: false, subagent: null, lastAgentError: null,
++    promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+     ...overrides,
+   }
+ }
+diff --git a/packages/client/ui-tool/tests/chat-code-subcalls.client.spec.tsx b/packages/client/ui-tool/tests/chat-code-subcalls.client.spec.tsx
+index 1f0cd29..ef0fc4f 100644
+--- a/packages/client/ui-tool/tests/chat-code-subcalls.client.spec.tsx
++++ b/packages/client/ui-tool/tests/chat-code-subcalls.client.spec.tsx
+@@ -86,7 +86,7 @@ function snapshotWith(
+     runningCalls: nestedRunningCalls,
+     pending: [], queue: [], running: runningCalls.length > 0, composerPhase: 'active', removed: false,
+     openState: 'open', openError: null,
+-    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
++    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   }
+ }
+ 
+diff --git a/packages/client/ui-tool/tests/diff-card.client.spec.tsx b/packages/client/ui-tool/tests/diff-card.client.spec.tsx
+index f430682..a1f2e91 100644
+--- a/packages/client/ui-tool/tests/diff-card.client.spec.tsx
++++ b/packages/client/ui-tool/tests/diff-card.client.spec.tsx
+@@ -358,7 +358,7 @@ describe('DetailsPanel diff Output section', () => {
+       nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+       pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+       openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-      promptError: null, blank: false, subagent: null, lastAgentError: null, ...over,
++      promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null, ...over,
+     }
+   }
+ 
+diff --git a/packages/client/ui-tool/tests/read-card.client.spec.tsx b/packages/client/ui-tool/tests/read-card.client.spec.tsx
+index 3cf318c..7f0e83d 100644
+--- a/packages/client/ui-tool/tests/read-card.client.spec.tsx
++++ b/packages/client/ui-tool/tests/read-card.client.spec.tsx
+@@ -304,7 +304,7 @@ describe('DetailsPanel Output section (read)', () => {
+       nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+       pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+       openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-      promptError: null, blank: false, subagent: null, lastAgentError: null, ...over,
++      promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null, ...over,
+     }
+   }
+ 
+diff --git a/packages/client/ui-tool/tests/search-card.client.spec.tsx b/packages/client/ui-tool/tests/search-card.client.spec.tsx
+index 351c889..d1602d7 100644
+--- a/packages/client/ui-tool/tests/search-card.client.spec.tsx
++++ b/packages/client/ui-tool/tests/search-card.client.spec.tsx
+@@ -423,7 +423,7 @@ describe('DetailsPanel Output section (search)', () => {
+       nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+       pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+       openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-      promptError: null, blank: false, subagent: null, lastAgentError: null, ...over,
++      promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null, ...over,
+     }
+   }
+ 
+diff --git a/packages/client/ui-tool/tests/terminal-card.client.spec.tsx b/packages/client/ui-tool/tests/terminal-card.client.spec.tsx
+index 8c8fdca..67aebc9 100644
+--- a/packages/client/ui-tool/tests/terminal-card.client.spec.tsx
++++ b/packages/client/ui-tool/tests/terminal-card.client.spec.tsx
+@@ -489,7 +489,7 @@ describe('DetailsPanel Output section', () => {
+       nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+       pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+       openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-      promptError: null, blank: false, subagent: null, lastAgentError: null, ...over,
++      promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null, ...over,
+     }
+   }
+ 
+diff --git a/packages/client/ui-tool/tests/web-card.client.spec.tsx b/packages/client/ui-tool/tests/web-card.client.spec.tsx
+index 279fad7..cf4835e 100644
+--- a/packages/client/ui-tool/tests/web-card.client.spec.tsx
++++ b/packages/client/ui-tool/tests/web-card.client.spec.tsx
+@@ -253,7 +253,7 @@ describe('DetailsPanel web Output section', () => {
+       nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+       pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+       openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-      promptError: null, blank: false, subagent: null, lastAgentError: null, ...over,
++      promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null, ...over,
+     }
+   }
+ 
+diff --git a/packages/client/ui-trajectory/tests/views.client.spec.tsx b/packages/client/ui-trajectory/tests/views.client.spec.tsx
+index 77c3587..d3ee82c 100644
+--- a/packages/client/ui-trajectory/tests/views.client.spec.tsx
++++ b/packages/client/ui-trajectory/tests/views.client.spec.tsx
+@@ -109,7 +109,7 @@ function historySnapshot(
+     loadingOlder: false,
+     promptError: null,
+     blank: nodes.length === 0,
+-    lastAgentError: null,
++    lastAgentError: null, activity: null,
+   }
+ }
+ 
+diff --git a/packages/test-support/client-runtime/src/fixtures.ts b/packages/test-support/client-runtime/src/fixtures.ts
+index 396e3a0..72e29e9 100644
+--- a/packages/test-support/client-runtime/src/fixtures.ts
++++ b/packages/test-support/client-runtime/src/fixtures.ts
+@@ -67,7 +67,7 @@ export function conversationSnapshot(sessionId: SessionId): ConversationSnapshot
      loadingOlder: false,
      promptError: null,
      blank: false,
@@ -291,372 +512,3 @@ index 9cf0251..31a496d 100644
    }
  }
  
-diff --git a/packages/client/ui-conversation/src/client/apply.ts b/packages/client/ui-conversation/src/client/apply.ts
-index 14cecbd..d0a7cc3 100644
---- a/packages/client/ui-conversation/src/client/apply.ts
-+++ b/packages/client/ui-conversation/src/client/apply.ts
-@@ -32,6 +32,7 @@ import { todoToolview } from './toolviews/todo-row.tsx'
- import { askQuestionToolview } from './toolviews/ask-question-row.tsx'
- import { todoDockEntry } from './skeleton/TodoPanel.tsx'
- import { queueDockEntry } from './queue/QueueDock.tsx'
-+import { workingLineEntry } from './chat/WorkingLine.tsx'
- import { ConversationRoot } from './skeleton/ConversationRoot.tsx'
- import { ConversationSession } from './skeleton/ConversationSession.tsx'
- import { DetailsPanel } from './skeleton/DetailsPanel.tsx'
-@@ -379,6 +380,10 @@ export function apply(ctx: Context): void {
-   // registration seam into the input dock declared above.
-   ctx.plugin(queueDockEntry)
- 
-+  // The turn-summary line (working-activity done snapshot) rides the same
-+  // seam, ordered before the queue strip.
-+  ctx.plugin(workingLineEntry)
-+
-   slots.register({
-     name: 'details',
-     locale: NS,
-diff --git a/packages/client/ui-conversation/src/client/chat/AssistantMarkdown.tsx b/packages/client/ui-conversation/src/client/chat/AssistantMarkdown.tsx
-index de882e8..9a1f82c 100644
---- a/packages/client/ui-conversation/src/client/chat/AssistantMarkdown.tsx
-+++ b/packages/client/ui-conversation/src/client/chat/AssistantMarkdown.tsx
-@@ -45,6 +45,14 @@ function firstLine(text: string): string {
-   return nl === -1 ? text : text.slice(0, nl)
- }
- 
-+/** Strip status-bar narration lines (⏵ …) from assistant text for display.
-+ *  The working-activity plugin surfaces those lines in the live status label;
-+ *  the durable log keeps them, this presentation pass hides them from the chat
-+ *  body so a turn with several narrated steps stays clean. */
-+function stripNarrationLines(text: string): string {
-+  return text.replace(/^[ \t]*⏵[^\n]*\n?/gm, '')
-+}
-+
- /** Latest non-blank reasoning line while the block is still streaming. */
- function latestLine(text: string): string {
-   const visible = text.trimEnd()
-@@ -103,7 +111,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
-         {blocks.map((block, i) => {
-           switch (block.kind) {
-             case 'text': return (
--              <MarkdownText key={i} text={block.text} streaming={streaming} codeLabels={codeLabels} />
-+              <MarkdownText key={i} text={stripNarrationLines(block.text)} streaming={streaming} codeLabels={codeLabels} />
-             )
-             case 'reasoning': return <ThinkRow key={i} text={block.text} running={streaming && i === last} t={t} />
-             // Grouped into tool rows by ChatView; hasVisible above skips an empty shell.
-diff --git a/packages/client/ui-conversation/src/client/chat/ChatView.tsx b/packages/client/ui-conversation/src/client/chat/ChatView.tsx
-index 3320eb0..a200829 100644
---- a/packages/client/ui-conversation/src/client/chat/ChatView.tsx
-+++ b/packages/client/ui-conversation/src/client/chat/ChatView.tsx
-@@ -25,7 +25,7 @@ import {
-   memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode,
- } from 'react'
- import type {
--  CodeSubCall, CommandNode, ConversationNode, ConversationSnapshot, RunningToolCall, ToolResultNode,
-+  ActivityStatusView, CodeSubCall, CommandNode, ConversationNode, ConversationSnapshot, RunningToolCall, ToolResultNode,
- } from '@deepseek-ai/dsh-client-runtime/client'
- import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
- import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-@@ -282,8 +282,11 @@ const CommandRow = memo(function CommandRow({ renderSlot, node, t }: {
-   )
- })
- 
--/** Turn-level model activity label retained across first-token, tool, and streaming phases. */
--function TurnStatus({ startTime, t }: {
-+/** Turn-level model activity label retained across first-token, tool, and streaming phases.
-+ *  Falls back to the static label while the working-activity plugin is absent. */
-+function TurnStatus({ activity, startTime, t }: {
-+  /** The working-activity plugin's live snapshot, or null when absent. */
-+  activity: ActivityStatusView | null
-   /** The running turn's logged `turn/start` time; null falls back to mount
-    *  time when that boundary is outside the window. */
-   startTime: number | null
-@@ -306,9 +309,12 @@ function TurnStatus({ startTime, t }: {
-   // Short turns keep the plain label; the clock only appears once the turn
-   // has clearly been running for a while.
-   const showClock = elapsedMs >= 15_000
-+  const label = activity === null || activity.phase === 'idle' || activity.line === ''
-+    ? 'Deep diving...'
-+    : activity.line
-   return (
-     <div className={css.turnStatus} role="status" aria-live="polite">
--      Deep diving...
-+      {label}
-       {showClock && (
-         <span className={css.turnStatusClock} aria-hidden>
-           {formatRunDuration(elapsedMs, t)}
-@@ -343,6 +349,7 @@ export function ChatView({
-   // Workspace root off the session list row: path summaries display relative to it.
-   const cwd = useSessions(s => s.byId[sessionId]?.cwd)
-   const running = useSession(s => s.running)
-+  const activity = useSession(s => s.activity)
-   const runningCalls = useSession(s => s.runningCalls)
-   const codeDispatches = useSession(s => s.codeDispatches)
-   const openState = useSession(s => s.openState)
-@@ -685,7 +692,7 @@ export function ChatView({
-               double-render the same wait. */}
-           {/* Turn-level loading signal: rides the whole running turn (first-token
-               wait, tool execution, streaming) so it never flickers per step. */}
--          {running && <TurnStatus startTime={runningTurnStart} t={t} />}
-+          {running && <TurnStatus activity={activity} startTime={runningTurnStart} t={t} />}
-           {pendingSteering.map(item => (
-             <PendingSteeringBubble key={item.id} content={item.content} t={t} />
-           ))}
-diff --git a/packages/client/ui-conversation/src/client/chat/WorkingLine.module.css b/packages/client/ui-conversation/src/client/chat/WorkingLine.module.css
-new file mode 100644
-index 0000000..7c2bf50
---- /dev/null
-+++ b/packages/client/ui-conversation/src/client/chat/WorkingLine.module.css
-@@ -0,0 +1,54 @@
-+/* Working line row: one dim line with a phase-colored breathing marker,
-+   sized to the composer dock inset like the queue strip. */
-+
-+.line {
-+  box-sizing: border-box;
-+  display: flex;
-+  align-items: center;
-+  gap: 8px;
-+  width: 100%;
-+  max-width: var(--dsh-composer-card-max-width);
-+  margin: 0 auto;
-+  padding: 4px 16px 0;
-+  font-family: var(--dsw-font-family);
-+  font-size: 13px;
-+  line-height: 18px;
-+  color: var(--dsw-alias-label-secondary);
-+}
-+
-+.marker {
-+  flex: none;
-+  width: 7px;
-+  height: 7px;
-+  border-radius: 50%;
-+  background: var(--dsw-alias-label-tertiary);
-+  animation: working-pulse 1.6s ease-in-out infinite;
-+}
-+
-+/* The model's turn is done: steady marker in the brand tone, no pulse. */
-+.line[data-activity-phase='done'] .marker {
-+  background: var(--dsw-alias-state-business-primary);
-+  animation: none;
-+}
-+
-+/* A tool is actually executing: brand-tone pulse. */
-+.line[data-activity-phase='tool'] .marker {
-+  background: var(--dsw-alias-state-business-primary);
-+}
-+
-+/* Waiting for the first token: muted pulse. */
-+.line[data-activity-phase='waiting'] .marker {
-+  background: var(--dsw-alias-label-tertiary);
-+  opacity: 0.6;
-+}
-+
-+@keyframes working-pulse {
-+  0%,
-+  100% {
-+    opacity: 1;
-+  }
-+
-+  50% {
-+    opacity: 0.35;
-+  }
-+}
-diff --git a/packages/client/ui-conversation/src/client/chat/WorkingLine.tsx b/packages/client/ui-conversation/src/client/chat/WorkingLine.tsx
-new file mode 100644
-index 0000000..3c7aa56
---- /dev/null
-+++ b/packages/client/ui-conversation/src/client/chat/WorkingLine.tsx
-@@ -0,0 +1,47 @@
-+// Working-line dock entry: renders the turn-end statistics summary (the
-+// working-activity plugin's done snapshot) above the composer. Live phases are
-+// shown by the chat TurnStatus label, so this dock entry stays hidden while a
-+// turn runs and appears only after it settles.
-+//
-+// The 'conversation.input.dock' SlotMap declaration lives in
-+// ../contract/slots.ts beside the other input-region slots.
-+import type { Context } from 'cordis'
-+import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-+import { NS } from '../locales.ts'
-+import css from './WorkingLine.module.css'
-+
-+/** Full props of the dock entry: the input-zone runtime share + the locale seat. */
-+export type WorkingLineProps = PropsRuntime<'conversation.input.dock'> & PropsLocale<'conversation'>
-+
-+/**
-+ * Turn-summary line: one dim row with a steady marker, rendered only after a
-+ * turn settles (the done summary), hidden during live phases and idle.
-+ */
-+export function WorkingLine({ useSession }: WorkingLineProps) {
-+  const activity = useSession(s => s.activity)
-+  if (activity === null || activity.phase !== 'done' || activity.line === '') return null
-+  return (
-+    <div className={css.line} data-activity-phase={activity.phase}>
-+      <span className={css.marker} aria-hidden="true" />
-+      <span className={css.text}>{activity.line}</span>
-+    </div>
-+  )
-+}
-+
-+export const workingLineEntry = {
-+  name: 'conversation-working-line',
-+  inject: ['slots'],
-+  /**
-+   * Register the working line as the first input-dock entry (order 10, before
-+   * the queue strip at 20).
-+   * @param ctx - registrant context (disposal rides ctx.effect inside slots.register).
-+   */
-+  apply(ctx: Context): void {
-+    ctx.slots.register({
-+      name: 'conversation.input.dock',
-+      id: 'activity',
-+      order: 10,
-+      locale: NS,
-+    }, WorkingLine)
-+  },
-+}
-diff --git a/packages/client/ui-conversation/tests/working-line.spec.tsx b/packages/client/ui-conversation/tests/working-line.spec.tsx
-new file mode 100644
-index 0000000..a2eac2b
---- /dev/null
-+++ b/packages/client/ui-conversation/tests/working-line.spec.tsx
-@@ -0,0 +1,141 @@
-+// @vitest-environment jsdom
-+// WorkingLine (conversation.input.dock entry): renders the latest
-+// activity/status snapshot, hides while idle/absent, and updates live.
-+
-+import { afterEach, describe, expect, it } from 'vitest'
-+import { act, cleanup, render } from '@testing-library/react'
-+import type {
-+  ActivityStatusView, ConversationSnapshot, SessionId,
-+} from '@deepseek-ai/dsh-client-runtime/client'
-+import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
-+import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
-+import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
-+import { WorkingLine, type WorkingLineProps } from '../src/client/chat/WorkingLine.tsx'
-+import { zh } from '../src/client/locales.ts'
-+
-+const t: WorkingLineProps['t'] = makeTranslate(zh, commonZh)
-+
-+afterEach(cleanup)
-+
-+const SID = 's1' as SessionId
-+
-+const TOOL: ActivityStatusView = {
-+  phase: 'tool',
-+  line: '跑个命令 npm test · 12s',
-+  label: '跑个命令',
-+  detail: 'npm test',
-+  toolCount: 1,
-+  turnElapsedMs: 12_000,
-+  phaseStartedAt: 1_700_000_000_000,
-+}
-+
-+const THINKING: ActivityStatusView = {
-+  phase: 'thinking',
-+  line: '嗯…让我捋捋 · 总1m23s',
-+  phrase: '嗯…让我捋捋',
-+  toolCount: 0,
-+  turnElapsedMs: 83_000,
-+  phaseStartedAt: 1_700_000_000_000,
-+}
-+
-+const DONE: ActivityStatusView = {
-+  phase: 'done',
-+  line: '搞定 ✓ · 3 工具 · 想12s 干11s',
-+  toolCount: 3,
-+  turnElapsedMs: 25_000,
-+  phaseStartedAt: 1_700_000_000_000,
-+}
-+
-+function snapshotBase(activity: ActivityStatusView | null): ConversationSnapshot {
-+  return {
-+    sessionId: SID, nodes: [], turnEnds: new Map(), partial: null, runningCalls: [], codeDispatches: new Map(),
-+    pending: [], queue: [], running: false, composerPhase: 'active', removed: false, openState: 'open', openError: null,
-+    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
-+    activity,
-+  }
-+}
-+
-+function makeSource(init: ConversationSnapshot) {
-+  let snap = init
-+  const subs = new Set<() => void>()
-+  return {
-+    set: (next: ConversationSnapshot) => {
-+      snap = next
-+      for (const fn of [...subs]) fn()
-+    },
-+    source: {
-+      getSnapshot: () => snap,
-+      subscribe: (fn: () => void) => {
-+        subs.add(fn)
-+        return () => subs.delete(fn)
-+      },
-+    },
-+  }
-+}
-+
-+function renderLine(activity: ActivityStatusView | null) {
-+  const source = makeSource(snapshotBase(activity))
-+  const useSession = bindSnapshotSelector(source.source)
-+  return {
-+    ...render(<WorkingLine {...kitFor()} useSession={useSession} />),
-+    source,
-+  }
-+}
-+
-+/** Input-zone owner share plus the framework seats; mirrors queue-dock.spec. */
-+function kitFor() {
-+  return {
-+    sessionId: SID,
-+    t,
-+    useSessions: (() => { throw new Error('unused') }) as never,
-+    useWorkspaces: (() => { throw new Error('unused') }) as never,
-+    useProjection: (() => undefined) as never,
-+    session: null as never,
-+    input: null as never,
-+    useInput: (() => { throw new Error('unused') }) as never,
-+    inputActions: { setDraft: () => {}, submit: () => {} } as never,
-+  }
-+}
-+
-+describe('WorkingLine', () => {
-+  it('renders nothing before the first status publish', () => {
-+    const { container } = renderLine(null)
-+    expect(container.textContent).toBe('')
-+  })
-+
-+  it('hides while idle', () => {
-+    const { container } = renderLine({ ...DONE, phase: 'idle', line: '' })
-+    expect(container.textContent).toBe('')
-+  })
-+
-+  it('hides during live phases (tool)', () => {
-+    const { container } = renderLine(TOOL)
-+    expect(container.textContent).toBe('')
-+  })
-+
-+  it('hides during live phases (thinking)', () => {
-+    const { container } = renderLine(THINKING)
-+    expect(container.textContent).toBe('')
-+  })
-+
-+  it('shows the done summary', () => {
-+    const { container } = renderLine(DONE)
-+    const line = container.querySelector('[data-activity-phase="done"]')
-+    expect(line).not.toBeNull()
-+    expect(line!.textContent).toContain('搞定 ✓ · 3 工具')
-+  })
-+
-+  it('appears when a live snapshot settles into done', () => {
-+    const { container, source } = renderLine(TOOL)
-+    expect(container.textContent).toBe('')
-+    act(() => { source.set(snapshotBase(DONE)) })
-+    expect(container.querySelector('[data-activity-phase="done"]')).not.toBeNull()
-+    expect(container.textContent).toContain('搞定 ✓ · 3 工具')
-+  })
-+
-+  it('clears when the session goes idle', () => {
-+    const { container, source } = renderLine(DONE)
-+    act(() => { source.set(snapshotBase({ ...DONE, phase: 'idle', line: '' })) })
-+    expect(container.textContent).toBe('')
-+  })
-+})
