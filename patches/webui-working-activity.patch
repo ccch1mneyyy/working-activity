@@ -12,10 +12,10 @@ index b5433bb..ca1076a 100644
  } from './sessions/conversation.ts'
 diff --git a/packages/client/runtime/src/client/sessions/activity.ts b/packages/client/runtime/src/client/sessions/activity.ts
 new file mode 100644
-index 0000000..42a1a98
+index 0000000..6f62d3c
 --- /dev/null
 +++ b/packages/client/runtime/src/client/sessions/activity.ts
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,65 @@
 +/**
 + * Wire-narrowed `activity/status` payload for the client runtime.
 + *
@@ -59,7 +59,9 @@ index 0000000..42a1a98
 +  if (data === null || typeof data !== 'object' || Array.isArray(data)) return null
 +  const record = data as Record<string, unknown>
 +  if (typeof record.phase !== 'string' || !PHASES.has(record.phase)) return null
-+  if (typeof record.line !== 'string' || record.line.length === 0) return null
++  // idle is the host's "clear the line" signal and legitimately carries an
++  // empty line; every other phase must render text.
++  if (typeof record.line !== 'string' || (record.line.length === 0 && record.phase !== 'idle')) return null
 +  for (const key of ['toolCount', 'turnElapsedMs', 'phaseStartedAt']) {
 +    const value = record[key]
 +    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
@@ -105,7 +107,7 @@ index 698d8ab..6059724 100644
    /** Authoritative transient inbox snapshot, including queued and steering placements. */
    queue: readonly QueuedMessage[]
 diff --git a/packages/client/runtime/src/client/sessions/session.ts b/packages/client/runtime/src/client/sessions/session.ts
-index 3e5ec5a..da255c2 100644
+index 3e5ec5a..420d3d6 100644
 --- a/packages/client/runtime/src/client/sessions/session.ts
 +++ b/packages/client/runtime/src/client/sessions/session.ts
 @@ -21,6 +21,8 @@ import { EMPTY_CHAT_SNAPSHOT } from './conversation.ts'
@@ -147,7 +149,7 @@ index 3e5ec5a..da255c2 100644
      if (this.events.some(event => event.type === 'turn/start')) this.firstPromptPendingTurn = false
      this.conversation.replaceWindow(entries.map(conversationInput), hasMore)
      if (projections !== undefined) this.projections.seed(projections)
-@@ -670,12 +681,35 @@ export class Session implements SessionFace {
+@@ -670,12 +681,36 @@ export class Session implements SessionFace {
      if (tailSeq !== null && event.seq <= tailSeq) return 'none' // replay overlap, drop
      this.events.push(event)
      this.views.push(view)
@@ -172,7 +174,8 @@ index 3e5ec5a..da255c2 100644
 +    if ((event.type as string) !== 'activity/status') return false
 +    const data = parseActivityStatusData(event.data)
 +    if (data === null) {
-+      console.error(`[web-runtime] ignored malformed activity/status event at seq ${event.seq}`)
++      // debug 级：格式不合法的帧被丢弃是正常防御路径，不应在用户控制台刷屏
++      console.debug(`[web-runtime] ignored malformed activity/status event at seq ${event.seq}`)
 +      return false
 +    }
 +    if (this.activityStatus === data) return false
@@ -183,7 +186,7 @@ index 3e5ec5a..da255c2 100644
    /** Land a live session/event (open/repair in flight -> buffer; overlapping seq -> drop;
     *  a seq gap -> buffer + tail-page repull instead of appending a hole (a gap is an
     *  expected reconnect-window artifact, repaired by refetch). The window stays one contiguous
-@@ -743,6 +777,7 @@ export class Session implements SessionFace {
+@@ -743,6 +778,7 @@ export class Session implements SessionFace {
        turnEnds: legacy.turnEnds,
        partial: legacy.partial,
        runningCalls: legacy.runningCalls,
