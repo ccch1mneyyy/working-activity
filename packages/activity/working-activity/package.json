@@ -1,7 +1,7 @@
 {
   "name": "dsh-working-activity",
   "description": "Live model working-status line: playful copy, running tool, turn elapsed — for TUI prompt and Web UI",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "lib/types/index.js",
   "types": "lib/types/index.d.ts",
@@ -22,12 +22,14 @@
       "types": "./lib/types/status.d.ts",
       "default": "./lib/types/status.js"
     },
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
-    "src"
+    "src",
+    "cordis.patch.yml"
   ],
   "engines": {
     "node": "^22.19 || >=24"
@@ -36,6 +38,11 @@
     "build": "tsc -p tsconfig.json"
   },
   "license": "BSD-3-Clause",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1"
   },

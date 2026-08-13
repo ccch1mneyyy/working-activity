@@ -18,26 +18,37 @@ Two optional sinks, both off by default only when their seam is absent:
 
 ## Installation
 
+The package is a self-mounting bundle: it declares `dsh.bundle.patch`
+(`cordis.patch.yml`), so the official CLI both installs it and appends it to
+the profile's bundle layer stack:
+
+```sh
+dsh plugin --profile <profile> add dsh-working-activity
+```
+
+At boot, app-boot applies the bundle's patch list over the profile root and
+the package inserts its own `working-activity` row — no manual configuration
+required. To tune a value, override the row's config by id in the profile's
+user layer (`$DSH_HOME/profiles/<profile>/cordis.patch.yml`) instead of
+inserting a second same-id row:
+
 ```yaml
-# cordis.yml
-plugins:
-  - id: working-activity
-    name: 'dsh-working-activity'
+- id: working-activity
+  config:
+    publishIntervalMs: 500
 ```
 
 ## TUI usage
 
-Enable the plugin alongside `dsh-tui` and add the slot to the left prompt template:
+Install the plugin into a profile that composes the official `dsh-tui`, then
+add the `${activity}` slot to the left prompt template in the profile's user
+layer (`$DSH_HOME/profiles/<profile>/cordis.patch.yml`):
 
 ```yaml
-plugins:
-  - id: tui
-    name: '@deepseek-ai/dsh-tui'
-    config:
-      theme:
-        leftPrompt: '${cwd}${git/worktree}${activity}${model}${token_meter/cache_hit_rate}${context}'
-  - id: working-activity
-    name: 'dsh-working-activity'
+- id: tui
+  config:
+    theme:
+      leftPrompt: '${cwd}${git/worktree}${activity}${model}${token_meter/cache_hit_rate}${context}'
 ```
 
 While a turn runs, the prompt line shows e.g. `dsh main 跑个命令 npm test · 12s deepseek-chat …`; while thinking, `嗯…让我捋捋 · 总1m23s`; after the turn, `搞定 ✓ · 4 工具 · 想12s 干11s` briefly. Without `${activity}` in the template, the plugin is inert in the TUI (the slot is unregistered values are omitted by the template renderer).
@@ -57,7 +68,7 @@ Both fall back to the previous static label while the plugin is absent, so the W
 |---|---|---|---|
 | `phrases` | `boolean` | `true` | Playful copy pool; `false` renders plain functional labels |
 | `publish` | `boolean` | `true` | Append `activity/status` session events for UI consumers |
-| `tickMs` | `number` | `500` | Status render tick interval (50–5000) |
+| `tickMs` | `number` | `500` | Status render tick interval (100–5000) |
 | `publishIntervalMs` | `number` | `2000` | Minimum interval between published events while the line is stable (500–30000) |
 | `detailLimit` | `number` | `40` | Max displayed detail length (paths/commands/patterns), 8–120 |
 | `customActions` | `object` | `{}` | Exact tool-name → action-copy pools, e.g. `{"my_deploy": ["部署一下", "上线中"]}` |
