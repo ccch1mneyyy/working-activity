@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-working-activity
+# dsh-working-activity
 
 A live "working line" for DeepSeek Harness: the model's real-time activity — playful thinking copy, the tool actually running, elapsed time, and a turn-end summary — shown while the agent works.
 
@@ -22,7 +22,7 @@ Two optional sinks, both off by default only when their seam is absent:
 # cordis.yml
 plugins:
   - id: working-activity
-    name: '@deepseek-ai/dsh-working-activity'
+    name: 'dsh-working-activity'
 ```
 
 ## TUI usage
@@ -37,7 +37,7 @@ plugins:
       theme:
         leftPrompt: '${cwd}${git/worktree}${activity}${model}${token_meter/cache_hit_rate}${context}'
   - id: working-activity
-    name: '@deepseek-ai/dsh-working-activity'
+    name: 'dsh-working-activity'
 ```
 
 While a turn runs, the prompt line shows e.g. `dsh main 跑个命令 npm test · 12s deepseek-chat …`; while thinking, `嗯…让我捋捋 · 总1m23s`; after the turn, `搞定 ✓ · 4 工具 · 想12s 干11s` briefly. Without `${activity}` in the template, the plugin is inert in the TUI (the slot is unregistered values are omitted by the template renderer).

@@ -1,9 +1,9 @@
 /**
  * Package-owned `activity/status` snapshot invariants.
- * @module @deepseek-ai/dsh-working-activity/invariant
+ * @module dsh-working-activity/invariant
  */
 
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
@@ -12,7 +12,7 @@ export const name = 'working-activity-invariant'
 /** Service required before the companion can reserve package ownership. */
 export const inject = ['invariants']
 
-const PACKAGE_NAME = '@deepseek-ai/dsh-working-activity'
+const PACKAGE_NAME = 'dsh-working-activity'
 const PHASES = new Set(['idle', 'waiting', 'thinking', 'tool', 'done'])
 
 /** Validate one published activity snapshot before it reaches the durable log. */

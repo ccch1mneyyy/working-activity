@@ -10,7 +10,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   actionFor, fmtDuration, isGitTool, isNight, pickPhrase, thinkingPhrase,
   WAITING_PHRASES, DONE_PHRASES, FAIL_PHRASES,
-} from './phrases.ts'
+} from './phrases.js'
 
 /** Public status phases a UI can render. */
 export type ActivityPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'

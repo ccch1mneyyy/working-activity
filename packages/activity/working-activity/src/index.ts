@@ -15,18 +15,19 @@
  * @module @deepseek-ai/dsh-working-activity
  */
 
-import type { Context } from 'cordis'
-import z from 'schemastery'
+import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import type { Session } from '@deepseek-ai/dsh-session'
-import type { AgentStatus } from '@deepseek-ai/dsh-agent'
+// Type-only: resolves the agent/status cordis event declaration.
+import type {} from '@deepseek-ai/dsh-agent'
 // Type-only: resolves ctx.systemPrompt for the narration section injection.
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import { ActivityTracker } from './status.ts'
-import type { ActivityState } from './status.ts'
-import type { ActivityStatusEvent } from './events.ts'
+import { ActivityTracker } from './status.js'
+import type { ActivityState } from './status.js'
+import type { ActivityStatusEvent } from './events.js'
 // Re-export the event type + SessionEventMap merge: the package root must carry
 // the declare-module side effect for consumers resolving the built d.ts.
-export type * from './events.ts'
+export type * from './events.js'
 
 export const name = 'working-activity'
 
@@ -189,7 +190,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (activeSession === session) activeSession = undefined
   })
 
-  ctx.on('agent/status', (agent, status: AgentStatus) => {
+  ctx.on('agent/status', ({ agent, status }) => {
     const session = agent.session
     const tracker = trackerFor(session)
     tracker.onAgentStatus(status)

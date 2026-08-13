@@ -7,7 +7,7 @@
  * @module @deepseek-ai/dsh-working-activity/events
  */
 
-import type { ActivityPhase } from './status.ts'
+import type { ActivityPhase } from './status.js'
 
 /** Durable payload of one `activity/status` snapshot. */
 export interface ActivityStatusEvent {
@@ -32,7 +32,7 @@ export interface ActivityStatusEvent {
 /** The `activity/status` phase vocabulary, exported for wire consumers. */
 export type { ActivityPhase }
 
-declare module '@deepseek-ai/dsh-session' {
+declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /**
      * Log-only UI snapshot of the model's working activity (thinking copy,
