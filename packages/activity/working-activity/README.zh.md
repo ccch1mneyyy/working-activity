@@ -58,7 +58,7 @@ Web 客户端通过 `activity/status` 事件以两种方式渲染实时状态行
 | 键 | 类型 | 默认值 | 含义 |
 |---|---|---|---|
 | `phrases` | `boolean` | `true` | 俏皮文案池；`false` 渲染朴素功能标签 |
-| `publish` | `boolean` | `true` | 为 UI 消费者追加 `activity/status` 会话事件 |
+| `publish` | `boolean` | `false` | 为 UI 消费者追加 `activity/status` 会话事件。默认关闭：追加的事件目前会导致会话日志无法 resume（见下方说明） |
 | `tickMs` | `number` | `500` | 状态渲染 tick 间隔（50–5000） |
 | `publishIntervalMs` | `number` | `2000` | 状态行稳定时两次发布事件的最小间隔（500–30000） |
 | `detailLimit` | `number` | `40` | 详情最大展示长度（路径/命令/模式），8–120 |
@@ -81,6 +81,8 @@ Web 客户端通过 `activity/status` 事件以两种方式渲染实时状态行
   phaseStartedAt: number  // 相位开始的 epoch 毫秒（动画锚点）
 }
 ```
+
+> **为什么 `publish` 默认关闭：** `session.append()` 无法把事件标记为 ignorable，而 resume 的读取路径会拒绝包含未知且不可忽略事件类型的日志——开启 `publish` 后，凡是显示过状态行的会话都会 resume 失败。仅在日志重放消费者、且 harness 支持 ignorable append 时再打开。TUI 实时状态行不受影响。
 
 发布规则：状态行变化立即发布；稳定行最多每 `publishIntervalMs` 重发一次，让长工具的已耗时保持实时而不刷爆日志。所有数据都是无损 JSON；可选字段缺省时省略。
 

@@ -39,7 +39,9 @@ async function harness(adapter: MockAdapter): Promise<Context> {
   const ctx = new Context()
   await mountAgentLoopTestDependencies(ctx)
   await ctx.plugin(AgentLoop, { agents: [] })
-  await ctx.plugin(WorkingActivity)
+  // Publish is opt-in in the shipped default (see Config.publish); these
+  // integration tests exist to cover the publishing path, so enable it.
+  await ctx.plugin(WorkingActivity, { publish: true })
   // A real tool for the scripted tool call (bash is not composed here).
   ctx.tools.register(defineContentToolFixture({
     name: 'mock_ls',

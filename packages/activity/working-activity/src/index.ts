@@ -35,7 +35,13 @@ export const name = 'working-activity'
 export type Config = {
   /** Playful copy pool; false renders plain functional labels. */
   phrases?: boolean
-  /** Append `activity/status` session events for UI consumers. */
+  /** Append `activity/status` session events for UI consumers. Default OFF:
+   *  dsh-session's append() cannot mark events ignorable, and the resume
+   *  read path refuses logs containing unknown non-ignorable types — every
+   *  appended snapshot makes the whole session unresumable. Re-enable only
+   *  for a log-replaying consumer on a harness that supports ignorable
+   *  appends. The live status line (prompt slot / session events) is
+   *  unaffected by this flag. */
   publish?: boolean
   /** Status render tick interval in ms. */
   tickMs?: number
@@ -51,7 +57,7 @@ export type Config = {
 
 export const Config = z.object({
   phrases: z.boolean().default(true),
-  publish: z.boolean().default(true),
+  publish: z.boolean().default(false),
   tickMs: z.number().step(50).min(100).max(5000).default(500),
   publishIntervalMs: z.number().step(500).min(500).max(30_000).default(2000),
   detailLimit: z.number().step(1).min(8).max(120).default(40),
@@ -90,7 +96,7 @@ const NARRATE_INSTRUCTION =
 export function apply(ctx: Context, config: Config = {}): void {
   const resolved: ResolvedConfig = {
     phrases: config.phrases ?? true,
-    publish: config.publish ?? true,
+    publish: config.publish ?? false,
     tickMs: config.tickMs ?? 500,
     publishIntervalMs: config.publishIntervalMs ?? 2000,
     detailLimit: config.detailLimit ?? 40,

@@ -67,7 +67,7 @@ Both fall back to the previous static label while the plugin is absent, so the W
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `phrases` | `boolean` | `true` | Playful copy pool; `false` renders plain functional labels |
-| `publish` | `boolean` | `true` | Append `activity/status` session events for UI consumers |
+| `publish` | `boolean` | `false` | Append `activity/status` session events for UI consumers. Off by default: appended events currently make session logs unresumable (see note below) |
 | `tickMs` | `number` | `500` | Status render tick interval (100–5000) |
 | `publishIntervalMs` | `number` | `2000` | Minimum interval between published events while the line is stable (500–30000) |
 | `detailLimit` | `number` | `40` | Max displayed detail length (paths/commands/patterns), 8–120 |
@@ -90,6 +90,8 @@ Both fall back to the previous static label while the plugin is absent, so the W
   phaseStartedAt: number  // epoch ms the phase started (animation anchor)
 }
 ```
+
+> **Why `publish` is off by default:** `session.append()` cannot mark events ignorable, and the resume read path refuses any log containing unknown non-ignorable event types — so with `publish: true`, every session that rendered a status line fails to resume. Re-enable only for a log-replaying consumer on a harness that supports ignorable appends. The live TUI prompt line is unaffected.
 
 Publishing rules: line changes publish immediately; a stable line republishes at most every `publishIntervalMs` so a long tool's elapsed time stays live without flooding the log. All data is lossless JSON; optional fields are omitted when absent.
 
