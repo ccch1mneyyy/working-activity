@@ -1,7 +1,7 @@
 {
   "name": "dsh-working-activity",
   "description": "Live model working-status line: playful copy, running tool, turn elapsed — for TUI prompt and Web UI",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "main": "lib/types/index.js",
   "types": "lib/types/index.d.ts",
@@ -88,5 +88,19 @@
     "react": "^18.2.0",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-client-runtime": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-conversation": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-slots": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
   }
 }
