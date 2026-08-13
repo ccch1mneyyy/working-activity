@@ -8,15 +8,15 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
-import * as WorkingActivity from '@deepseek-ai/dsh-working-activity'
+import * as WorkingActivity from '../src/index'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
-import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
+import { MockAdapter, textResponse, toolCallResponse } from './mock-adapter'
 
 /** Wire-narrowed view of the published snapshot (host merge not needed here). */
 interface ActivitySnapshot {
@@ -65,7 +65,7 @@ async function harness(adapter: MockAdapter): Promise<Context> {
 
 function waitForIdle(ctx: Context, agent: Agent): Promise<void> {
   return new Promise((resolve) => {
-    const dispose = ctx.on('agent/status', (subject, status) => {
+    const dispose = ctx.on('agent/status', ({ agent: subject, status }) => {
       if (subject === agent && status === 'idle') {
         dispose()
         resolve()
@@ -138,7 +138,10 @@ describe('working-activity through the agent loop', () => {
     for (const event of activityEvents(agent.session.events)) {
       const data = event.data as Record<string, unknown>
       expect(data.phase).toBeTruthy()
-      expect(data.line).toBeTruthy()
+      // Idle bootstrap frames legitimately carry an empty line (see the
+      // webui runtime patch's relaxed idle-frame validation); live phases
+      // must always render a line.
+      if (data.phase !== 'idle') expect(data.line).toBeTruthy()
       expect(JSON.stringify(data)).toBe(JSON.stringify(JSON.parse(JSON.stringify(data))))
     }
   })

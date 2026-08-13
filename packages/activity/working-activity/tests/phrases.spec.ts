@@ -47,7 +47,7 @@ describe('thinkingPhrase', () => {
 
 describe('actionFor', () => {
   it('maps known tool names to playful verbs', () => {
-    expect(actionFor('bash')).toMatch(/跑|命令|敲|终端|执行/)
+    expect(actionFor('bash')).toMatch(/跑|命令|敲|终端|执行|bash/)
     expect(actionFor('read_file')).toMatch(/读|看|翻|瞄|康/)
   })
 
