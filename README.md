@@ -1,4 +1,32 @@
-# pi-working-activity
+# working-activity
+
+> 让 agent 的"工作状态行"活过来——实时工具动态与进度、俏皮文案、模型自述、上下文预警。同一套想法,适配两个平台:**pi CLI** 与 **DeepSeek Harness(DSH)**。
+
+作者:chimney([@ccch1mneyyy](https://github.com/ccch1mneyyy))。社区出品,非官方项目。
+
+> 本仓库由 `pi-working-activity`(主仓库,保留全部历史)与 `dsh-working-activity`(已归档)合并而来;两个 npm 包继续独立发布,各自的安装方式不变。
+
+## 平台一览
+
+| 平台 | npm 包 | 源码位置 | 安装 |
+|---|---|---|---|
+| pi CLI | `pi-working-activity` | [`extensions/`](extensions/index.ts) | `pi install npm:pi-working-activity` |
+| DeepSeek Harness | `dsh-working-activity` | [`packages/activity/working-activity/`](packages/activity/working-activity/) | `dsh plugin --profile <profile> add dsh-working-activity` |
+
+## 目录结构
+
+```
+extensions/                             pi 版扩展(唯一源码,无构建)
+tests/                                  pi 版测试
+package.json                            pi 版包(发布 pi-working-activity)
+packages/activity/working-activity/     DSH 版插件(发布 dsh-working-activity)
+patches/webui-working-activity.patch    DSH Web UI runtime 补丁
+docs/dsh-working-activity.md            DSH 版完整文档(原 dsh 仓库 README)
+```
+
+---
+
+# pi 版
 
 > 让 pi 的 Working 行活过来——实时工具动态与进度 + 俏皮中文文案 + 稀有彩虹彩蛋 + 模型自述 + 上下文预警。
 
@@ -271,6 +299,44 @@ pi install npm:pi-working-activity
 - **英文**：面无表情的冷幽默，穿插在中文文案中制造反差
 - **游戏梗**（SSR、金色传说、gg、ez）只放在稀有彩蛋池（1/150 爆率），不影响日常使用
 
+---
+
+# DSH 版
+
+> DeepSeek Harness 的实时"工作状态行"插件:模型的实时活动——俏皮思考文案、真正在跑的工具、已耗时、收尾摘要——在 agent 干活时展示在 Web UI 与 dsh-cc 终端上。
+
+## 安装
+
+```sh
+dsh plugin --profile <你的 profile> add dsh-working-activity
+```
+
+装好 [dsh-cc-tui](https://github.com/ccch1mneyyy/dsh-cc-tui) 后同装本插件,dsh-cc 状态栏会消费 `activity/status` 事件流渲染工作状态行。Web 端需要额外的 runtime 补丁,见下方文档。
+
+## 文档
+
+- [DSH 版完整文档](docs/dsh-working-activity.md)(原 dsh-working-activity 仓库 README:特性、挂载机制、配置、已知限制)
+- 插件包 README:[`packages/activity/working-activity/README.md`](packages/activity/working-activity/README.md)(英文)与 [`README.zh.md`](packages/activity/working-activity/README.zh.md)
+
+## 开发
+
+```sh
+cd packages/activity/working-activity
+pnpm install && pnpm run build   # 构建(host tsc + client tsc,产物进 lib/)
+pnpm run build:client           # 构建浏览器 bundle(tsdown → lib/client.js)
+pnpm test                        # 单测 + 集成测试(状态机/文案/自述/集成)
+```
+
+## 已知限制
+
+- 单一状态行:每会话一条,Web/终端消费端显示最近活跃会话。
+- 无进度百分比:DSH 没有工具进度事件,长工具只显示已耗时。
+- `publish` 默认关闭:追加 `activity/status` 会话事件目前会导致会话日志无法 resume,仅对支持 ignorable append 的宿主开启(详见插件 README)。
+
+## 隐私与安全
+
+两个版本都不采集、不上传任何数据,无网络请求、无遥测。pi 版配置与文案只存在本地;DSH 版 `activity/status` 仅写入本地会话日志(log-only 事件,模型不可见,回放忽略)。
+
 ## License
 
-MIT
+根仓库文档与 pi 版:`MIT`。DSH 插件包(`packages/activity/working-activity/`):`BSD-3-Clause`(见其 `package.json` 与 `LICENSE`)。

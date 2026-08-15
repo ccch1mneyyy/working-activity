@@ -43,6 +43,14 @@
     "build:client": "tsdown -c tsdown.config.ts"
   },
   "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ccch1mneyyy/working-activity.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ccch1mneyyy/working-activity/issues"
+  },
+  "homepage": "https://github.com/ccch1mneyyy/working-activity#readme",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

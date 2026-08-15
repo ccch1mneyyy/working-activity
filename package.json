@@ -48,10 +48,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ccch1mneyyy/pi-working-activity.git"
+    "url": "git+https://github.com/ccch1mneyyy/working-activity.git"
   },
   "bugs": {
-    "url": "https://github.com/ccch1mneyyy/pi-working-activity/issues"
+    "url": "https://github.com/ccch1mneyyy/working-activity/issues"
   },
-  "homepage": "https://github.com/ccch1mneyyy/pi-working-activity#readme"
+  "homepage": "https://github.com/ccch1mneyyy/working-activity#readme"
 }
