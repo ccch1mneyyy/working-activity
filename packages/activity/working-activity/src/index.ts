@@ -23,6 +23,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 // Type-only: resolves ctx.systemPrompt for the narration section injection.
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { ActivityTracker } from './status.js'
+import { registerActivityEventType } from './registration.js'
 import type { ActivityState } from './status.js'
 import type { ActivityStatusEvent } from './events.js'
 // Re-export the event type + SessionEventMap merge: the package root must carry
@@ -55,7 +56,11 @@ export type Config = {
   narrate?: boolean
 }
 
-export const Config = z.object({
+// Explicit annotation: the inferred z.dict output references cosmokit's
+// Dict through a pnpm-virtual path, which is not portable in declaration
+// emit (TS2883) when the dependency graph shifts. The global `Schemastery`
+// interface comes from schemastery's own d.ts (declare global).
+export const Config: Schemastery<Config> = z.object({
   phrases: z.boolean().default(true),
   publish: z.boolean().default(false),
   tickMs: z.number().step(50).min(100).max(5000).default(500),
@@ -94,6 +99,12 @@ const NARRATE_INSTRUCTION =
  * @param config - Validated plugin config (schema defaults applied).
  */
 export function apply(ctx: Context, config: Config = {}): void {
+  // Register the event type BEFORE anything can publish or validate: the
+  // strict read paths (resume seed validation, persistence load) refuse
+  // logs with unknown non-ignorable types. Registration is unconditional —
+  // it also protects READING logs written by an earlier publish:true era
+  // in processes where publishing itself is off. See registration.ts.
+  registerActivityEventType()
   const resolved: ResolvedConfig = {
     phrases: config.phrases ?? true,
     publish: config.publish ?? false,
