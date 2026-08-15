@@ -1,0 +1,517 @@
+diff --git a/packages/client/runtime/src/client/index.ts b/packages/client/runtime/src/client/index.ts
+index b5433bb..ca1076a 100644
+--- a/packages/client/runtime/src/client/index.ts
++++ b/packages/client/runtime/src/client/index.ts
+@@ -80,6 +80,7 @@ export type {
+   SteeringMessageNode, TodoItem, ToolCallBlock, ToolResultNode, TurnErrorNode, TurnMaxTokensNode,
+   UnknownSurfaceNode, UserMessageNode,
+ } from './sessions/conversation.ts'
++export type { ActivityStatusView } from './sessions/activity.ts'
+ export {
+   EMPTY_CHAT_SNAPSHOT, EMPTY_CONVERSATION_VIEWS, toAssistantBlock, toAssistantBlocks,
+ } from './sessions/conversation.ts'
+diff --git a/packages/client/runtime/src/client/sessions/activity.ts b/packages/client/runtime/src/client/sessions/activity.ts
+new file mode 100644
+index 0000000..6f62d3c
+--- /dev/null
++++ b/packages/client/runtime/src/client/sessions/activity.ts
+@@ -0,0 +1,65 @@
++/**
++ * Wire-narrowed `activity/status` payload for the client runtime.
++ *
++ * The event type is declared by the host-side @deepseek-ai/dsh-working-activity
++ * plugin whose types cannot enter the client program (its host Context merges
++ * collide with the client's), so this wire consumer narrows the payload
++ * structurally — the same posture as every other cross-wire event payload.
++ * @module @deepseek-ai/dsh-client-runtime/activity
++ */
++
++/** The `activity/status` phase vocabulary as seen on the wire. */
++export type ActivityStatusPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
++
++/** One validated `activity/status` snapshot for UI rendering. */
++export interface ActivityStatusView {
++  readonly phase: ActivityStatusPhase
++  /** Human-readable status line (plain text, no ANSI). */
++  readonly line: string
++  /** Short label of the current work, when present. */
++  readonly label?: string
++  /** Detail fragment (path / command / pattern), when present. */
++  readonly detail?: string
++  /** The playful phrase currently shown, when present. */
++  readonly phrase?: string
++  /** Tools completed in the current turn. */
++  readonly toolCount: number
++  /** Milliseconds since the current turn started. */
++  readonly turnElapsedMs: number
++  /** Wall-clock time (epoch ms) the current phase started, for animations. */
++  readonly phaseStartedAt: number
++}
++
++const PHASES: ReadonlySet<string> = new Set(['idle', 'waiting', 'thinking', 'tool', 'done'])
++
++/**
++ * Validate a wire `activity/status` payload structurally.
++ * @param data - The raw event data.
++ * @returns The narrowed view, or `null` when malformed.
++ */
++export function parseActivityStatusData(data: unknown): ActivityStatusView | null {
++  if (data === null || typeof data !== 'object' || Array.isArray(data)) return null
++  const record = data as Record<string, unknown>
++  if (typeof record.phase !== 'string' || !PHASES.has(record.phase)) return null
++  // idle is the host's "clear the line" signal and legitimately carries an
++  // empty line; every other phase must render text.
++  if (typeof record.line !== 'string' || (record.line.length === 0 && record.phase !== 'idle')) return null
++  for (const key of ['toolCount', 'turnElapsedMs', 'phaseStartedAt']) {
++    const value = record[key]
++    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
++  }
++  for (const key of ['label', 'detail', 'phrase']) {
++    if (record[key] !== undefined && typeof record[key] !== 'string') return null
++  }
++  const view: ActivityStatusView = {
++    phase: record.phase as ActivityStatusPhase,
++    line: record.line,
++    toolCount: record.toolCount as number,
++    turnElapsedMs: record.turnElapsedMs as number,
++    phaseStartedAt: record.phaseStartedAt as number,
++    ...(record.label === undefined ? {} : { label: record.label as string }),
++    ...(record.detail === undefined ? {} : { detail: record.detail as string }),
++    ...(record.phrase === undefined ? {} : { phrase: record.phrase as string }),
++  }
++  return view
++}
+diff --git a/packages/client/runtime/src/client/sessions/conversation.ts b/packages/client/runtime/src/client/sessions/conversation.ts
+index 698d8ab..6059724 100644
+--- a/packages/client/runtime/src/client/sessions/conversation.ts
++++ b/packages/client/runtime/src/client/sessions/conversation.ts
+@@ -15,6 +15,7 @@ import type {
+   RpcError, SessionId, SubagentAddress, ToolCallView, ToolResultView,
+ } from '@deepseek-ai/dsh-api-remotes/client'
+ import type { PendingInteraction } from './pending.ts'
++import type { ActivityStatusView } from './activity.ts'
+ import type { ContextProvenanceView, KnownContextForm } from './context-provenance.ts'
+ import type {
+   ChatConversationViewNode, ConversationTimelineSnapshot, ConversationViewSnapshotStore,
+@@ -444,6 +445,12 @@ export interface ConversationSnapshot {
+   turnEnds: ReadonlyMap<number, number>
+   partial: PartialAssistant | null
+   runningCalls: readonly RunningToolCall[]
++  /**
++   * Latest validated `activity/status` snapshot (the working-activity plugin's
++   * live working line), or null before the first publish. Window rebuilds
++   * restore the latest in-window snapshot.
++   */
++  activity: ActivityStatusView | null
+   pending: readonly PendingInteraction[]
+   /** Authoritative transient inbox snapshot, including queued and steering placements. */
+   queue: readonly QueuedMessage[]
+diff --git a/packages/client/runtime/src/client/sessions/session.ts b/packages/client/runtime/src/client/sessions/session.ts
+index 3e5ec5a..420d3d6 100644
+--- a/packages/client/runtime/src/client/sessions/session.ts
++++ b/packages/client/runtime/src/client/sessions/session.ts
+@@ -21,6 +21,8 @@ import { EMPTY_CHAT_SNAPSHOT } from './conversation.ts'
+ import type { PendingInteraction } from './pending.ts'
+ import { PendingWait } from './pending.ts'
+ import { Notifier } from './notifier.ts'
++import { parseActivityStatusData } from './activity.ts'
++import type { ActivityStatusView } from './activity.ts'
+ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+ import type { SessionRemotes } from './remotes.ts'
+ import { ProjectionValueStore } from './projection-store.ts'
+@@ -101,6 +103,8 @@ export class Session implements SessionFace {
+   private removed = false
+   private promptError: PromptError | null = null
+   private lastAgentError: string | null = null
++  /** Latest validated `activity/status` snapshot (working-activity plugin), or null. */
++  private activityStatus: ActivityStatusView | null = null
+   /** Live events buffered during open/resync and stitched by sequence once history lands. */
+   private liveBuffer: { event: SessionEvent; view: ToolEventView | undefined }[] = []
+   /** Gap repair in flight; live events detour to the buffer until the tail page lands. */
+@@ -427,6 +431,7 @@ export class Session implements SessionFace {
+     this.events = []
+     this.views = []
+     this.baseSeq = 0
++    this.activityStatus = null
+     // Superseded, not settled: the baseline replay re-sends still-pending requested frames verbatim
+     // (same rpcId), re-minting fresh waits; a stale reference's respond() still reaches the host.
+     this.pending.clear()
+@@ -655,6 +660,12 @@ export class Session implements SessionFace {
+     this.views = entries.map(e => e.view)
+     this.baseSeq = this.events[0]?.seq ?? 0
+     this.hasMore = hasMore
++    // Replay the window's activity frames: the latest in-window snapshot is
++    // restored on paging/stitching exactly like the conversation rebuild below
++    // (live frames already applied via appendLive stay idempotent — last frame
++    // wins with identical data).
++    this.activityStatus = null
++    for (const event of this.events) this.applyActivityEvent(event)
+     if (this.events.some(event => event.type === 'turn/start')) this.firstPromptPendingTurn = false
+     this.conversation.replaceWindow(entries.map(conversationInput), hasMore)
+     if (projections !== undefined) this.projections.seed(projections)
+@@ -670,12 +681,36 @@ export class Session implements SessionFace {
+     if (tailSeq !== null && event.seq <= tailSeq) return 'none' // replay overlap, drop
+     this.events.push(event)
+     this.views.push(view)
++    if (this.applyActivityEvent(event)) this.notifier.markDirty()
+     if (event.type === 'turn/start') this.firstPromptPendingTurn = false
+     const queueChanged = this.queueMirror.acceptDurable(event)
+     const publication = this.conversation.append({ event, view })
+     return queueChanged ? 'immediate' : publication
+   }
+ 
++  /**
++   * Apply one `activity/status` wire frame: last frame wins; malformed frames
++   * are ignored without disturbing the snapshot. The event type is declared by
++   * the host-side dsh-working-activity plugin whose types cannot enter the
++   * client program (its host Context merges collide with the client's), so
++   * this wire consumer narrows it structurally — the same posture as every
++   * other cross-wire event payload.
++   * @param event - the incoming session event.
++   * @returns whether the snapshot changed (caller schedules a republish).
++   */
++  private applyActivityEvent(event: SessionEvent): boolean {
++    if ((event.type as string) !== 'activity/status') return false
++    const data = parseActivityStatusData(event.data)
++    if (data === null) {
++      // debug 级：格式不合法的帧被丢弃是正常防御路径，不应在用户控制台刷屏
++      console.debug(`[web-runtime] ignored malformed activity/status event at seq ${event.seq}`)
++      return false
++    }
++    if (this.activityStatus === data) return false
++    this.activityStatus = data
++    return true
++  }
++
+   /** Land a live session/event (open/repair in flight -> buffer; overlapping seq -> drop;
+    *  a seq gap -> buffer + tail-page repull instead of appending a hole (a gap is an
+    *  expected reconnect-window artifact, repaired by refetch). The window stays one contiguous
+@@ -743,6 +778,7 @@ export class Session implements SessionFace {
+       turnEnds: legacy.turnEnds,
+       partial: legacy.partial,
+       runningCalls: legacy.runningCalls,
++      activity: this.activityStatus,
+       pending: this.pendingCache.value,
+       queue: this.queueMirror.snapshot(),
+       running: this.running,
+diff --git a/packages/client/runtime/tests/activity.client.spec.ts b/packages/client/runtime/tests/activity.client.spec.ts
+new file mode 100644
+index 0000000..37a9377
+--- /dev/null
++++ b/packages/client/runtime/tests/activity.client.spec.ts
+@@ -0,0 +1,107 @@
++/**
++ * Activity-status wire handling: payload narrowing plus Session snapshot
++ * integration through the live mux path and history replay.
++ * @module @deepseek-ai/dsh-client-runtime/tests/activity
++ */
++
++import { describe, expect, it } from 'vitest'
++import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
++import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
++import { Session } from '../src/client/sessions/session.ts'
++import { parseActivityStatusData } from '../src/client/sessions/activity.ts'
++import { FakeApiClient, fakeRemote, ok } from './fake-api.client.ts'
++import { entries } from './event-script.client.ts'
++
++const SID = 'fk-activity' as SessionId
++
++function activityEvent(seq: number, data: Record<string, unknown>): SessionEvent {
++  return { seq, time: 1_700_000_000_000 + seq, type: 'activity/status', data } as unknown as SessionEvent
++}
++
++const VALID = {
++  phase: 'tool',
++  line: '跑个命令 npm test · 12s',
++  label: '跑个命令',
++  detail: 'npm test',
++  toolCount: 2,
++  turnElapsedMs: 15_000,
++  phaseStartedAt: 1_700_000_000_000,
++}
++
++describe('parseActivityStatusData', () => {
++  it('narrows a valid payload', () => {
++    const view = parseActivityStatusData(VALID)
++    expect(view).not.toBeNull()
++    expect(view).toMatchObject({
++      phase: 'tool',
++      line: '跑个命令 npm test · 12s',
++      detail: 'npm test',
++      toolCount: 2,
++    })
++  })
++
++  it('accepts a payload with optional fields omitted', () => {
++    const view = parseActivityStatusData({
++      phase: 'thinking', line: '嗯…让我捋捋 · 总1m', toolCount: 0, turnElapsedMs: 60_000, phaseStartedAt: 1,
++    })
++    expect(view).not.toBeNull()
++    expect(view?.phrase).toBeUndefined()
++  })
++
++  it('rejects malformed payloads', () => {
++    expect(parseActivityStatusData(null)).toBeNull()
++    expect(parseActivityStatusData('nope')).toBeNull()
++    expect(parseActivityStatusData({ ...VALID, phase: 'dancing' })).toBeNull()
++    expect(parseActivityStatusData({ ...VALID, line: '' })).toBeNull()
++    expect(parseActivityStatusData({ ...VALID, toolCount: -1 })).toBeNull()
++    expect(parseActivityStatusData({ ...VALID, toolCount: Number.NaN })).toBeNull()
++    expect(parseActivityStatusData({ ...VALID, label: 42 })).toBeNull()
++  })
++})
++
++describe('Session activity snapshot', () => {
++  async function opened(history: SessionEvent[]): Promise<Session> {
++    const api = new FakeApiClient()
++    api.onHistory = () => Promise.resolve(ok({ events: entries(history) as never[], hasMore: false }))
++    const session = new Session(SID, api, fakeRemote())
++    await session.open()
++    return session
++  }
++
++  it('publishes the latest live activity/status frame', async () => {
++    const session = await opened([])
++    expect(session.getSnapshot().activity).toBeNull()
++    session.handleMuxEnvelope('r1' as never, { type: 'session/event', sessionId: SID, event: activityEvent(0, VALID) })
++    await Promise.resolve()
++    expect(session.getSnapshot().activity).toMatchObject({ phase: 'tool', line: '跑个命令 npm test · 12s' })
++  })
++
++  it('updates on later frames and keeps the reference stable otherwise', async () => {
++    const session = await opened([])
++    session.handleMuxEnvelope('r1' as never, { type: 'session/event', sessionId: SID, event: activityEvent(0, VALID) })
++    await Promise.resolve()
++    const first = session.getSnapshot().activity
++    session.handleMuxEnvelope('r2' as never, {
++      type: 'session/event', sessionId: SID,
++      event: activityEvent(1, { ...VALID, phase: 'done', line: '搞定 ✓ · 2 工具' }),
++    })
++    await Promise.resolve()
++    expect(session.getSnapshot().activity).toMatchObject({ phase: 'done', line: '搞定 ✓ · 2 工具' })
++    expect(session.getSnapshot().activity).not.toBe(first)
++  })
++
++  it('ignores malformed frames without crashing the snapshot', async () => {
++    const session = await opened([])
++    session.handleMuxEnvelope('r1' as never, { type: 'session/event', sessionId: SID, event: activityEvent(0, { ...VALID, phase: 'dancing' }) })
++    await Promise.resolve()
++    expect(session.getSnapshot().activity).toBeNull()
++  })
++
++  it('restores the latest in-window snapshot from history replay', async () => {
++    const session = await opened([
++      activityEvent(0, VALID),
++      activityEvent(1, { ...VALID, phase: 'thinking', line: '嗯…让我捋捋 · 总5s' }),
++    ])
++    expect(session.getSnapshot().activity).toMatchObject({ phase: 'thinking', line: '嗯…让我捋捋 · 总5s' })
++  })
++})
+diff --git a/packages/client/ui-conversation/tests/chat-stats.client.spec.tsx b/packages/client/ui-conversation/tests/chat-stats.client.spec.tsx
+index 4ace851..ab920f8 100644
+--- a/packages/client/ui-conversation/tests/chat-stats.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/chat-stats.client.spec.tsx
+@@ -47,7 +47,7 @@ function snapshotBase(): ConversationSnapshot {
+     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: chatSnapshotFixture(),
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: false, composerPhase: 'active', removed: false, openState: 'open', openError: null,
+-    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
++    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   }
+ }
+ 
+diff --git a/packages/client/ui-conversation/tests/chat-view.client.spec.tsx b/packages/client/ui-conversation/tests/chat-view.client.spec.tsx
+index 360b589..925ac1a 100644
+--- a/packages/client/ui-conversation/tests/chat-view.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/chat-view.client.spec.tsx
+@@ -52,7 +52,7 @@ function snapshotBase(): ConversationSnapshot {
+     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: chatSnapshotFixture(), nodes: [],
+     turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: false, composerPhase: 'active', removed: false, openState: 'open', openError: null,
+-    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
++    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   }
+ }
+ 
+diff --git a/packages/client/ui-conversation/tests/gate-branch-tails.client.spec.tsx b/packages/client/ui-conversation/tests/gate-branch-tails.client.spec.tsx
+index 588ca52..d177671 100644
+--- a/packages/client/ui-conversation/tests/gate-branch-tails.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/gate-branch-tails.client.spec.tsx
+@@ -53,7 +53,7 @@ function snapshotBase(): ConversationSnapshot {
+     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: EMPTY_CHAT_SNAPSHOT,
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: false, composerPhase: 'active', removed: false, openState: 'open', openError: null,
+-    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
++    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   }
+ }
+ 
+diff --git a/packages/client/ui-conversation/tests/input-bar.client.spec.tsx b/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
+index 94354bd..9a4e108 100644
+--- a/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
+@@ -43,7 +43,7 @@ function snapshotOf(overrides: Partial<ConversationSnapshot> = {}): Conversation
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+     openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-    promptError: null, blank: false, subagent: null, lastAgentError: null,
++    promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+     ...overrides,
+   }
+ }
+diff --git a/packages/client/ui-conversation/tests/input-matrix.client.spec.tsx b/packages/client/ui-conversation/tests/input-matrix.client.spec.tsx
+index 9518318..8264500 100644
+--- a/packages/client/ui-conversation/tests/input-matrix.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/input-matrix.client.spec.tsx
+@@ -32,7 +32,7 @@ function mountBar(shell: SessionInputShell, over?: { running?: boolean; disabled
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: over?.running ?? false, composerPhase: 'active',
+     removed: over?.disabled ?? false, openState: 'open', openError: null, hasMore: false,
+-    loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
++    loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   })
+   const props: InputBarProps = {
+     sessionId: SID,
+diff --git a/packages/client/ui-conversation/tests/input-scenarios.client.spec.tsx b/packages/client/ui-conversation/tests/input-scenarios.client.spec.tsx
+index 8f72841..e3c46d3 100644
+--- a/packages/client/ui-conversation/tests/input-scenarios.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/input-scenarios.client.spec.tsx
+@@ -118,7 +118,7 @@ async function scopedBench(register?: (inputTriggers: InputTriggerService) => vo
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+     openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-    promptError: null, blank: false, subagent: null, lastAgentError: null,
++    promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   })
+   const barProps: InputBarProps = {
+     sessionId,
+diff --git a/packages/client/ui-conversation/tests/queue-dock.client.spec.tsx b/packages/client/ui-conversation/tests/queue-dock.client.spec.tsx
+index 4367a74..c3e6f39 100644
+--- a/packages/client/ui-conversation/tests/queue-dock.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/queue-dock.client.spec.tsx
+@@ -38,7 +38,7 @@ function snapshotWith(queue: QueuedMessage[]): ConversationSnapshot {
+     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: EMPTY_CHAT_SNAPSHOT,
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue, running: true, composerPhase: 'active', removed: false, openState: 'open', openError: null,
+-    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
++    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   }
+ }
+ 
+diff --git a/packages/client/ui-conversation/tests/skeleton.client.spec.tsx b/packages/client/ui-conversation/tests/skeleton.client.spec.tsx
+index acf618f..19ccf03 100644
+--- a/packages/client/ui-conversation/tests/skeleton.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/skeleton.client.spec.tsx
+@@ -77,7 +77,7 @@ function conversationSnapshot(overrides: Partial<ConversationSnapshot> = {}): Co
+     nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+     pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+     openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-    promptError: null, blank: false, subagent: null, lastAgentError: null,
++    promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+     ...overrides,
+   }
+ }
+diff --git a/packages/client/ui-tool/tests/chat-code-subcalls.client.spec.tsx b/packages/client/ui-tool/tests/chat-code-subcalls.client.spec.tsx
+index 1f0cd29..ef0fc4f 100644
+--- a/packages/client/ui-tool/tests/chat-code-subcalls.client.spec.tsx
++++ b/packages/client/ui-tool/tests/chat-code-subcalls.client.spec.tsx
+@@ -86,7 +86,7 @@ function snapshotWith(
+     runningCalls: nestedRunningCalls,
+     pending: [], queue: [], running: runningCalls.length > 0, composerPhase: 'active', removed: false,
+     openState: 'open', openError: null,
+-    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null,
++    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null,
+   }
+ }
+ 
+diff --git a/packages/client/ui-tool/tests/diff-card.client.spec.tsx b/packages/client/ui-tool/tests/diff-card.client.spec.tsx
+index f430682..a1f2e91 100644
+--- a/packages/client/ui-tool/tests/diff-card.client.spec.tsx
++++ b/packages/client/ui-tool/tests/diff-card.client.spec.tsx
+@@ -358,7 +358,7 @@ describe('DetailsPanel diff Output section', () => {
+       nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+       pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+       openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-      promptError: null, blank: false, subagent: null, lastAgentError: null, ...over,
++      promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null, ...over,
+     }
+   }
+ 
+diff --git a/packages/client/ui-tool/tests/read-card.client.spec.tsx b/packages/client/ui-tool/tests/read-card.client.spec.tsx
+index 3cf318c..7f0e83d 100644
+--- a/packages/client/ui-tool/tests/read-card.client.spec.tsx
++++ b/packages/client/ui-tool/tests/read-card.client.spec.tsx
+@@ -304,7 +304,7 @@ describe('DetailsPanel Output section (read)', () => {
+       nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+       pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+       openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-      promptError: null, blank: false, subagent: null, lastAgentError: null, ...over,
++      promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null, ...over,
+     }
+   }
+ 
+diff --git a/packages/client/ui-tool/tests/search-card.client.spec.tsx b/packages/client/ui-tool/tests/search-card.client.spec.tsx
+index 351c889..d1602d7 100644
+--- a/packages/client/ui-tool/tests/search-card.client.spec.tsx
++++ b/packages/client/ui-tool/tests/search-card.client.spec.tsx
+@@ -423,7 +423,7 @@ describe('DetailsPanel Output section (search)', () => {
+       nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+       pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+       openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-      promptError: null, blank: false, subagent: null, lastAgentError: null, ...over,
++      promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null, ...over,
+     }
+   }
+ 
+diff --git a/packages/client/ui-tool/tests/terminal-card.client.spec.tsx b/packages/client/ui-tool/tests/terminal-card.client.spec.tsx
+index 8c8fdca..67aebc9 100644
+--- a/packages/client/ui-tool/tests/terminal-card.client.spec.tsx
++++ b/packages/client/ui-tool/tests/terminal-card.client.spec.tsx
+@@ -489,7 +489,7 @@ describe('DetailsPanel Output section', () => {
+       nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+       pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+       openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-      promptError: null, blank: false, subagent: null, lastAgentError: null, ...over,
++      promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null, ...over,
+     }
+   }
+ 
+diff --git a/packages/client/ui-tool/tests/web-card.client.spec.tsx b/packages/client/ui-tool/tests/web-card.client.spec.tsx
+index 279fad7..cf4835e 100644
+--- a/packages/client/ui-tool/tests/web-card.client.spec.tsx
++++ b/packages/client/ui-tool/tests/web-card.client.spec.tsx
+@@ -253,7 +253,7 @@ describe('DetailsPanel web Output section', () => {
+       nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+       pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+       openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+-      promptError: null, blank: false, subagent: null, lastAgentError: null, ...over,
++      promptError: null, blank: false, subagent: null, lastAgentError: null, activity: null, ...over,
+     }
+   }
+ 
+diff --git a/packages/client/ui-trajectory/tests/views.client.spec.tsx b/packages/client/ui-trajectory/tests/views.client.spec.tsx
+index 77c3587..d3ee82c 100644
+--- a/packages/client/ui-trajectory/tests/views.client.spec.tsx
++++ b/packages/client/ui-trajectory/tests/views.client.spec.tsx
+@@ -109,7 +109,7 @@ function historySnapshot(
+     loadingOlder: false,
+     promptError: null,
+     blank: nodes.length === 0,
+-    lastAgentError: null,
++    lastAgentError: null, activity: null,
+   }
+ }
+ 
+diff --git a/packages/test-support/client-runtime/src/fixtures.ts b/packages/test-support/client-runtime/src/fixtures.ts
+index 396e3a0..72e29e9 100644
+--- a/packages/test-support/client-runtime/src/fixtures.ts
++++ b/packages/test-support/client-runtime/src/fixtures.ts
+@@ -67,7 +67,7 @@ export function conversationSnapshot(sessionId: SessionId): ConversationSnapshot
+     loadingOlder: false,
+     promptError: null,
+     blank: false,
+-    lastAgentError: null,
++    lastAgentError: null, activity: null,
+   }
+ }
+ 

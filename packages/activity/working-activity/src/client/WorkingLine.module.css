@@ -1,0 +1,74 @@
+/* Working line row: one dim line with a phase-colored breathing marker and
+   the turn's tool-count badge, sized to the composer dock inset like the
+   queue strip. Mirrors the pre-slots patch's WorkingLine visuals, re-targeted
+   at the rc.6 design tokens. */
+
+.line {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
+  margin: 0 auto;
+  padding: 4px 16px 0;
+  font-family: var(--dsw-font-family);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.marker {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-tertiary);
+  animation: working-pulse 1.6s ease-in-out infinite;
+}
+
+/* The model's turn is done: steady marker in the brand tone, no pulse. */
+.line[data-activity-phase='done'] .marker {
+  background: var(--dsw-alias-state-business-primary);
+  animation: none;
+}
+
+/* A tool is actually executing: brand-tone pulse. */
+.line[data-activity-phase='tool'] .marker {
+  background: var(--dsw-alias-state-business-primary);
+}
+
+/* Waiting for the first token: muted pulse. */
+.line[data-activity-phase='waiting'] .marker {
+  background: var(--dsw-alias-label-tertiary);
+  opacity: 0.6;
+}
+
+.text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tools {
+  flex: none;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--dsw-alias-surface-tertiary);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+@keyframes working-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}

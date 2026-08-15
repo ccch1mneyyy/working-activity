@@ -1,0 +1,19 @@
+# dsh-working-activity bundle patch: mount the plugin itself into the
+# profile composition tree.
+#
+# `dsh plugin --profile <name> add dsh-working-activity` auto-initializes the
+# profile (first layer @deepseek-ai/dsh-base), pnpm-installs this package into
+# the profile, and the CLI's reconcile step appends it to the profile's
+# dsh.profile.bundles because this package.json declares `dsh.bundle.patch`.
+# At boot, app-boot applies every bundle's patch list in bundle order over the
+# empty root; this insert list is what actually mounts the working-activity
+# row — no manual configuration is needed.
+#
+# All row config stays at schema defaults (phrases/publish/tickMs/
+# publishIntervalMs/detailLimit/customActions/narrate). To tune a value (for
+# dsh-cc, set publishIntervalMs to 500), override this row's config by id in
+# the profile's own cordis.patch.yml user layer — do NOT insert a second
+# same-id row.
+- insert:
+    - id: working-activity
+      name: 'dsh-working-activity'
