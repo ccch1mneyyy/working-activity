@@ -4,7 +4,7 @@
 
 作者:chimney([@ccch1mneyyy](https://github.com/ccch1mneyyy))。社区出品,非官方项目。
 
-> 本仓库由 `pi-working-activity`(主仓库,保留全部历史)与 `dsh-working-activity`(已归档)合并而来;两个 npm 包继续独立发布,各自的安装方式不变。
+> 本仓库分为 pi和dsh两个版本，两个 npm 包继续独立发布,各自的安装方式不变。
 
 ## 平台一览
 
