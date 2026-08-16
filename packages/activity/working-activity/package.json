@@ -1,7 +1,7 @@
 {
   "name": "dsh-working-activity",
   "description": "Live model working-status line: playful copy, running tool, turn elapsed — for TUI prompt and Web UI",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "type": "module",
   "main": "lib/types/index.js",
   "types": "lib/types/index.d.ts",
