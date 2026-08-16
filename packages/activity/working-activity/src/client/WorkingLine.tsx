@@ -21,7 +21,12 @@ const TOOLS_LABEL = 'tools this turn'
  * conversation snapshot and renders the row, or nothing when idle/absent.
  */
 export function WorkingLine({ useSession }: WorkingLineProps) {
-  const activity = useSession(s => s.activity)
+  // Defensive read: the runtime patch that puts `activity` onto the
+  // conversation snapshot ships separately — on an unpatched host the field
+  // is absent (undefined), not null, and this component must render nothing
+  // instead of crashing into the slot error boundary. Same never-throw
+  // discipline as the node side's registration.js.
+  const activity = useSession(s => s.activity ?? null)
   if (activity === null || activity.phase === 'idle' || activity.line === '') return null
   return (
     <div className={css.line} data-activity-phase={activity.phase}>

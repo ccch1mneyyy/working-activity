@@ -42,7 +42,8 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
     "build:client": "tsdown -c tsdown.config.ts",
     "verify:deps": "node scripts/verify-manifest-deps.mjs",
-    "prepublishOnly": "npm run verify:deps && npm run build && npm run build:client"
+    "verify:lockfiles": "node scripts/verify-lockfiles.mjs",
+    "prepublishOnly": "npm run verify:deps && npm run verify:lockfiles && npm run build && npm run build:client"
   },
   "license": "BSD-3-Clause",
   "repository": {

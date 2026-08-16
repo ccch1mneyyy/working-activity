@@ -90,18 +90,17 @@ try {
   registerActivityEventType()
   assert.equal(knownB.has('activity/status'), true, 'second call keeps the registration')
 
-  // Optional legacy probe: a real harness checkout's CLI tree, when present.
-  const realCliBin = process.env.DSH_CLI_BIN ?? 'D:/code/projects/deepseek-harness/apps/cli/lib/bin.js'
-  try {
+  // Optional legacy probe: a real harness checkout's CLI tree, driven purely
+  // by DSH_CLI_BIN — skipped when the env is unset.
+  const realCliBin = process.env.DSH_CLI_BIN
+  if (realCliBin === undefined || realCliBin.length === 0) {
+    console.log('verify-registration: SKIP real-CLI-tree probe (DSH_CLI_BIN unset)')
+  } else {
     const realCliKnown = createRequire(realCliBin)('@deepseek-ai/dsh-session').KNOWN_SESSION_EVENT_TYPES
     realCliKnown.delete('activity/status')
     registerActivityEventType()
     assert.equal(realCliKnown.has('activity/status'), false,
       'fixture argv[1] must not leak into an unrelated CLI tree')
-  } catch (error) {
-    // Absent checkout (or a foreign-platform default path) — nothing to probe.
-    if (error?.code !== 'MODULE_NOT_FOUND' && !(error instanceof TypeError)) throw error
-    console.log('verify-registration: SKIP real-CLI-tree probe (no dsh CLI checkout found)')
   }
 
   console.log('verify-registration: OK (own + CLI + validator copies covered)')
