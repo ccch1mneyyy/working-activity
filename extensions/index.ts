@@ -49,6 +49,9 @@ const FRAME_PRESETS: Record<string, { frames: string[]; intervalMs: number }> = 
 	},
 	hamburger: { frames: ["☱", "☲", "☴"], intervalMs: 220 },
 	moon: { frames: ["◐", "◓", "◑", "◒"], intervalMs: 240 },
+	// kimi-code MoonLoader 同款：8 帧 emoji 月相，120ms 一帧，比半圆版更丝滑
+	// 不带 \uFE0E：保留彩色 emoji 渲染（Windows Terminal 等现代终端效果最佳）
+	moon8: { frames: ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"], intervalMs: 120 },
 	comet: {
 		frames: ["●    ", " ●   ", "  ●  ", "   ● ", "    ●", "   ● ", "  ●  ", " ●   "],
 		intervalMs: 160,
@@ -75,7 +78,7 @@ const FRAME_PRESETS: Record<string, { frames: string[]; intervalMs: number }> = 
 	dqpb: { frames: ["d", "q", "p", "b"], intervalMs: 210 },
 	toggle: { frames: ["⊶", "⊷"], intervalMs: 300 },
 };
-const DEFAULT_PRESET = "moon";
+const DEFAULT_PRESET = "moon8";
 
 // ─── git 分支上下文感知 ─────────────────────────────────────────
 
