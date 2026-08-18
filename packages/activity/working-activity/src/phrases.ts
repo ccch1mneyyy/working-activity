@@ -1,9 +1,13 @@
 /**
  * Copy pools for the working-activity status line: short, colloquial, playful
- * Chinese fragments with deadpan English one-liners mixed in, matching the
- * pi-working-activity tone. Everything here is pure data + pure pickers.
+ * fragments with a "live person" vibe, in both Chinese and English. The zh
+ * pools are the original copy; the en pools mirror the same tone — deadpan,
+ * meme-y, occasionally unhinged. Everything here is pure data + pure pickers;
+ * the active language is resolved per pick via `langNow()`.
  * @module @deepseek-ai/dsh-working-activity/phrases
  */
+
+import { langNow } from './lang.js'
 
 /** A pool of copy fragments. */
 export type PhrasePool = readonly string[]
@@ -19,6 +23,8 @@ export function pickPhrase(entries: PhrasePool, previous?: string): string {
   }
   return next
 }
+
+// ── zh pools (original copy) ─────────────────────────────────────────────
 
 /** Thinking phrases while the model works without a tool. */
 export const THINKING_PHRASES: readonly string[] = [
@@ -114,6 +120,96 @@ export const NIGHT_PHRASES: readonly string[] = [
   '星星都睡了', '凌晨还在盘', '深夜上线', '凌晨部署', '通宵了',
 ]
 
+// ── en pools (same vibe, different language) ─────────────────────────────
+
+/** English thinking phrases — casual, meme-y, alive. */
+export const EN_THINKING_PHRASES: readonly string[] = [
+  'Thinking…', 'Pondering…', 'Mulling it over', 'Brain.exe running', 'Loading thoughts…',
+  'Deep in thought', 'Hmm…', 'Cogitating', 'Reasoning intensifies', 'On it', 'Working it out',
+  'Connecting the dots', 'Crunching ideas', 'Chewing on it', 'Neurons firing',
+  'Reticulating splines', 'Thinking cap on', 'Give me a sec', 'Halfway there',
+  'Still thinking', 'Turning the crank', 'Ideas brewing', 'Thoughts loading…',
+  'Calculating life choices', 'Let me cook', 'Cooking…', 'Brain cells: engaged',
+  'Thinking thoughts', 'Mmm…', 'Processing…', 'Almost', 'Just vibing with the problem',
+  'Mystery math happening', 'Gathering thoughts', 'In the zone', 'Distracted by a pigeon',
+  'Have you tried thinking harder?', 'Summoning wisdom', 'rrrr', 'um', 'ok ok', 'wait…',
+]
+
+/** English tiered phrases when thinking runs long. */
+export const EN_THINKING_TIERS: readonly {
+  readonly atMs: number
+  readonly pool: readonly string[]
+}[] = [
+  { atMs: 30_000, pool: ['30s in, still thinking', "This one's a thinker", 'Deeper than it looks', 'Getting warmer…', 'Still cooking', 'Brain on overtime', 'Not done yet', 'Almost there…', 'The gears are turning', 'One more sec', 'Loading 99%… again'] },
+  { atMs: 60_000, pool: ['1m in, still going', "This is a tough one", 'Full brain power', '1m, stay with me', 'Still grinding', 'Brain at full tilt', 'Almost…', 'Taking the scenic route', "It's a marathon, not a sprint", 'The plot thickens'] },
+  { atMs: 300_000, pool: ['5m in, big brain energy', 'This is a marathon', 'Seriously deep now', 'Meditating on it', 'Slow and steady', 'Getting there', 'Worth the wait', 'One song later…', '5 minutes of pure thought', "I've seen things", 'Ascending to another plane of thought'] },
+]
+
+/** English phrases while waiting for the first token. */
+export const EN_WAITING_PHRASES: readonly string[] = [
+  'Pinging the model…', 'Model inbound…', 'Waiting on the muse', 'Wake up, model',
+  "It's warming up", 'Model: almost there', 'Holding for a token…', 'Brewing a response…',
+  'Model is stretching', 'Just a sec', 'One moment, please', 'Loading…', 'Connecting…',
+  'Model said "be right back"', "It's yawning", 'First token incoming…', 'Hmm, still waiting',
+  'Model is putting on its glasses', 'Tick tock…', 'Summoning tokens…', 'Patiently waiting',
+  'Model is thinking of a hello', 'Booting brain…', 'Is it plugged in?', 'Gently poking the model',
+  'Waiting for the magic words…', 'A wild token appears… soon', 'Reticulating the request',
+]
+
+/** English tool-name → action verbs. */
+export const EN_ACTION_MAP: readonly {
+  readonly test: RegExp
+  readonly actions: readonly string[]
+}[] = [
+  { test: /^(read|read_file|cat)$/i, actions: ['Reading', 'Peeking at', 'Snooping through', 'Skimming', 'Checking out', 'Eyes on', 'Giving it a read'] },
+  { test: /^(write|write_file|create_file)$/i, actions: ['Writing', 'Typing it out', 'Crafting', 'Saving progress', 'Pen to paper (virtually)', 'Putting words down'] },
+  { test: /^(edit|edit_file|str_replace|apply_patch|search_replace)$/i, actions: ['Editing', 'Patching', 'Tweaking', 'Polishing', 'Fixing a typo (probably)', 'Adjusting', 'Giving it a touch-up'] },
+  { test: /^(bash|shell|run|exec|powershell|cmd)$/i, actions: ['Running', 'Executing', 'Shelling out', 'Firing a command', 'Terminal time', 'Doing terminal things', 'Making the computer do stuff'] },
+  { test: /^(grep|rg|search|search_in_files)$/i, actions: ['Searching', 'Grepping', 'Hunting for matches', 'Looking for a needle', 'Sifting through', 'Diving into the haystack'] },
+  { test: /^(find|glob)$/i, actions: ['Finding files', 'Looking for files', 'File hunt', 'Hunting down a path'] },
+  { test: /^(ls|list_dir|list)$/i, actions: ['Listing', 'Peeking at the dir', "What's in here?", 'Taking inventory'] },
+  { test: /^(web_search|search_web|brave|tavily|exa)$/i, actions: ['Searching the web', 'Googling', 'Researching', 'Web diving (the safe kind)', 'Looking it up'] },
+  { test: /^(web_fetch|fetch|fetch_content)$/i, actions: ['Fetching a page', 'Grabbing content', 'Pulling the page', 'Downloading knowledge'] },
+  { test: /^(mcp)/i, actions: ['Calling MCP', 'Hitting a service', 'MCP time', 'Talking to a server'] },
+  { test: /^(subagent|agent|task)$/i, actions: ['Delegating', 'Sending a subagent', 'Calling a helper', 'Outsourcing', 'Drafting a minion'] },
+  { test: /^(todo|manage_todo_list)$/i, actions: ['Updating todos', 'Checking the list', 'Todo time', 'Adding a checkbox'] },
+  { test: /^(browser|chrome|playwright)/i, actions: ['Driving the browser', 'Clicking around', 'Browsing', 'Puppeteering a browser'] },
+  { test: /^(git|gh|github)/i, actions: ['Git-ing', 'Committing', 'Version control dance', 'Git things', 'Saving the timeline'] },
+  { test: /^(ask_user_question|ask)$/i, actions: ['Asking you', 'Checking with you', 'Quick question', 'Pinging the human'] },
+  { test: /^(goal_complete|goal_blocked)$/i, actions: ['Updating goals', 'Tracking progress', 'Checking the objective'] },
+  { test: /^(todo_write)$/i, actions: ['Writing todos', 'Making a list', 'Adding a checkbox'] },
+]
+
+/** English fallback verbs for unknown tools. */
+export const EN_FALLBACK_ACTIONS: readonly string[] = [
+  'Working on it', 'Doing a thing', 'Handling it', 'Taking care of it',
+  'Something productive', 'Figuring it out', 'Winging it',
+]
+
+/** English tool failure phrases. */
+export const EN_FAIL_PHRASES: readonly string[] = [
+  'That failed', 'Oops', 'No dice', "Didn't work", 'Broke it (it was already broken)',
+  "It's not a bug, it's a feature", '404: success not found', 'Retry?', "Hmm, that's odd",
+  'RIP', 'Sigh…', 'One more time', 'Classic', 'Works on my machine',
+  'Have you tried turning it off and on?', 'Someone unplugged the internet',
+  'Out of ideas, trying again', 'The computer said no', 'Error: user error', 'So close…',
+]
+
+/** English turn-completion phrases. */
+export const EN_DONE_PHRASES: readonly string[] = [
+  'Done!', 'All set', 'Finished', "That's that", 'Done and dusted', 'Mission complete',
+  'Sorted', 'Wrapped up', 'Ship it!', 'Clean run', 'Nice', 'One and done', 'All green',
+  'Knocked out', 'Closed out', 'Task: destroyed', 'EZ', 'GG', 'Another one bites the dust',
+  'Victory lap', 'Boom', 'Tada!', 'Smooth sailing', 'No notes', 'Crushed it',
+]
+
+/** English night-owl phrases. */
+export const EN_NIGHT_PHRASES: readonly string[] = [
+  'Night owl shift', 'Burning midnight oil', 'Past midnight, still going', "The moon's out",
+  'Night grind', 'Up late', 'Almost dawn', '2AM thoughts', 'Red-eye shift',
+  'Who needs sleep anyway?', 'The stars are my witness',
+]
+
 /** Common git tool names / bash commands containing `git `. */
 export const GIT_TOOL_RE = /^(?:git|git_diff|git_commit|git_push|git_pull|git_checkout|git_branch|git_merge|git_rebase|github|gh)$/i
 
@@ -122,39 +218,69 @@ export function isNight(hour: number): boolean {
   return hour >= 0 && hour < 6
 }
 
+/** The zh or en base thinking pool by the active language. */
+function thinkingPools(): readonly { atMs: number; pool: readonly string[] }[] {
+  return langNow() === 'en' ? EN_THINKING_TIERS : THINKING_TIERS
+}
+
+/** The zh or en base waiting pool by the active language. */
+export function waitingPool(): readonly string[] {
+  return langNow() === 'en' ? EN_WAITING_PHRASES : WAITING_PHRASES
+}
+
 /**
- * Pick a thinking phrase appropriate for the elapsed thinking time.
+ * Pick a thinking phrase appropriate for the elapsed thinking time, in the
+ * active language.
  * @param elapsedMs - Milliseconds spent thinking in the current phase.
  * @param previous - Previously shown phrase, to avoid repeats.
  * @param night - Mix night-owl copy into the pool.
  */
 export function thinkingPhrase(elapsedMs: number, previous?: string, night = false): string {
-  let pool: readonly string[] = THINKING_PHRASES
-  for (const tier of THINKING_TIERS) {
+  let pool: readonly string[] = langNow() === 'en' ? EN_THINKING_PHRASES : THINKING_PHRASES
+  for (const tier of thinkingPools()) {
     if (elapsedMs >= tier.atMs) {
       pool = tier.pool
       break
     }
   }
-  if (night && pool === THINKING_PHRASES) {
-    return pickPhrase([...pool, ...NIGHT_PHRASES], previous)
+  if (night && pool === (langNow() === 'en' ? EN_THINKING_PHRASES : THINKING_PHRASES)) {
+    const nightPool = langNow() === 'en' ? EN_NIGHT_PHRASES : NIGHT_PHRASES
+    return pickPhrase([...pool, ...nightPool], previous)
   }
   return pickPhrase(pool, previous)
 }
 
+/** Pick a waiting phrase in the active language. */
+export function waitingPhrase(previous?: string): string {
+  return pickPhrase(waitingPool(), previous)
+}
+
+/** Pick a tool-failure phrase in the active language. */
+export function failPhrase(): string {
+  return pickPhrase(langNow() === 'en' ? EN_FAIL_PHRASES : FAIL_PHRASES)
+}
+
+/** Pick a turn-completion phrase in the active language. */
+export function donePhrase(): string {
+  return pickPhrase(langNow() === 'en' ? EN_DONE_PHRASES : DONE_PHRASES)
+}
+
 /**
- * Map a tool name to a playful action verb.
+ * Map a tool name to a playful action verb, in the active language.
  * @param toolName - Registry tool name (unqualified).
- * @param custom - Exact-name custom action pools, matched case-insensitively.
+ * @param custom - Exact-name custom action pools, matched case-insensitively
+ *   (user-owned copy, used verbatim in any language).
  */
 export function actionFor(toolName: string, custom?: Readonly<Record<string, readonly string[]>>): string {
   const normalized = toolName.trim().toLowerCase()
   const customPool = custom?.[normalized]
   if (customPool !== undefined && customPool.length > 0) return pickPhrase(customPool)
-  for (const { test, actions } of ACTION_MAP) {
+  const map = langNow() === 'en' ? EN_ACTION_MAP : ACTION_MAP
+  const fallback = langNow() === 'en' ? EN_FALLBACK_ACTIONS : FALLBACK_ACTIONS
+  for (const { test, actions } of map) {
     if (test.test(normalized)) return pickPhrase(actions)
   }
-  return pickPhrase(FALLBACK_ACTIONS)
+  return pickPhrase(fallback)
 }
 
 /** Whether a tool is a git operation (name match, or a shell command containing `git `). */

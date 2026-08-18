@@ -7,7 +7,7 @@
  * @module @deepseek-ai/dsh-working-activity/tests/integration
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
@@ -17,6 +17,12 @@ import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-test
 import * as WorkingActivity from '../src/index'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import { MockAdapter, textResponse, toolCallResponse } from './mock-adapter'
+import { setLangOverride } from '../src/lang.ts'
+
+// Deterministic language: the ambient machine may carry DSH_TUI_LANG or a
+// persisted ~/.dsh-tui/lang.json. The zh assertions below need zh pinned.
+beforeEach(() => setLangOverride('zh'))
+afterEach(() => setLangOverride('auto'))
 
 /** Wire-narrowed view of the published snapshot (host merge not needed here). */
 interface ActivitySnapshot {
@@ -41,7 +47,9 @@ async function harness(adapter: MockAdapter): Promise<Context> {
   await ctx.plugin(AgentLoop, { agents: [] })
   // Publish is opt-in in the shipped default (see Config.publish); these
   // integration tests exist to cover the publishing path, so enable it.
-  await ctx.plugin(WorkingActivity, { publish: true })
+  // `lang: 'zh'` pins the copy through the plugin config (the ambient
+  // machine may otherwise resolve en from the env/file/locale chain).
+  await ctx.plugin(WorkingActivity, { publish: true, lang: 'zh' })
   // A real tool for the scripted tool call (bash is not composed here).
   ctx.tools.register(defineContentToolFixture({
     name: 'mock_ls',

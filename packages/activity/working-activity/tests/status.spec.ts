@@ -4,9 +4,16 @@
  * @module @deepseek-ai/dsh-working-activity/tests/status
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { ActivityTracker, type TrackerConfig } from '../src/status.ts'
+import { setLangOverride } from '../src/lang.ts'
+
+// Deterministic language: the ambient machine may carry DSH_TUI_LANG or a
+// persisted ~/.dsh-tui/lang.json (the user's own prefs). Pin zh for the
+// legacy assertions and reset after.
+beforeEach(() => setLangOverride('zh'))
+afterEach(() => setLangOverride('auto'))
 
 /** Deterministic clock: time advances only when told. */
 function fixedClock(): { now: () => number; advance: (ms: number) => void } {
@@ -191,5 +198,62 @@ describe('ActivityTracker custom actions', () => {
     const state = tracker.render()
     expect(state.phase).toBe('tool')
     expect(['部署一下', '上线中']).toContain(state.label)
+  })
+})
+
+describe('ActivityTracker English mode', () => {
+  it('renders plain functional labels in English', () => {
+    setLangOverride('en')
+    const clock = fixedClock()
+    const tracker = new ActivityTracker(MINIMAL_CONFIG, clock.now)
+    tracker.onSessionEvent(turnStart(clock.now()))
+    clock.advance(1000)
+    expect(tracker.render().line).toBe('Waiting for model · total 1s')
+    tracker.onSessionEvent(reasoningDelta(clock.now()))
+    expect(tracker.render().line).toBe('Thinking · total 1s')
+  })
+
+  it('renders playful English thinking lines without Han', () => {
+    setLangOverride('en')
+    const clock = fixedClock()
+    const tracker = new ActivityTracker(LIVE_CONFIG, clock.now)
+    tracker.onSessionEvent(turnStart(clock.now()))
+    tracker.onSessionEvent(reasoningDelta(clock.now()))
+    clock.advance(5000)
+    const state = tracker.render()
+    expect(state.phase).toBe('thinking')
+    expect(state.line).toContain('total 5s')
+    expect(state.line).not.toMatch(/\p{Script=Han}/u)
+  })
+
+  it('renders an English done summary with tool split', () => {
+    setLangOverride('en')
+    const clock = fixedClock()
+    const tracker = new ActivityTracker(LIVE_CONFIG, clock.now)
+    tracker.onSessionEvent(turnStart(clock.now()))
+    clock.advance(2000)
+    tracker.onSessionEvent(toolCall(clock.now(), 'c1', 'edit', JSON.stringify({ file: 'src/index.ts' })))
+    clock.advance(4000)
+    tracker.onSessionEvent(toolResult(clock.now(), 'c1'))
+    clock.advance(1000)
+    tracker.onSessionEvent(turnEnd(clock.now()))
+    // Expire the done-fragment window so the summary branch renders.
+    clock.advance(4000)
+    const state = tracker.render()
+    expect(state.phase).toBe('done')
+    expect(state.line).not.toMatch(/\p{Script=Han}/u)
+    expect(state.line).toMatch(/1 tool/)
+    expect(state.line).toMatch(/thought \d+s worked \d+s/)
+  })
+
+  it('keeps the zh line when the language flips back', () => {
+    setLangOverride('en')
+    const clock = fixedClock()
+    const tracker = new ActivityTracker(MINIMAL_CONFIG, clock.now)
+    tracker.onSessionEvent(turnStart(clock.now()))
+    clock.advance(1000)
+    expect(tracker.render().line).toContain('Waiting for model')
+    setLangOverride('zh')
+    expect(tracker.render().line).toBe('等待模型响应 · 总1s')
   })
 })

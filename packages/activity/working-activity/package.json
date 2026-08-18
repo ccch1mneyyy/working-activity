@@ -1,7 +1,7 @@
 {
   "name": "dsh-working-activity",
   "description": "Live model working-status line: playful copy, running tool, turn elapsed — for TUI prompt and Web UI",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "type": "module",
   "main": "lib/types/index.js",
   "types": "lib/types/index.d.ts",
@@ -41,6 +41,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
     "build:client": "tsdown -c tsdown.config.ts",
+    "test": "vitest run",
     "verify:deps": "node scripts/verify-manifest-deps.mjs",
     "verify:lockfiles": "node scripts/verify-lockfiles.mjs",
     "prepublishOnly": "npm run verify:deps && npm run verify:lockfiles && npm run build && npm run build:client"
@@ -98,7 +99,8 @@
     "lightningcss": "^1.32.0",
     "react": "^18.2.0",
     "tsdown": "^0.22.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.4"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-client-runtime": {

@@ -24,6 +24,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { ActivityTracker } from './status.js'
 import { registerActivityEventType } from './registration.js'
+import { setLangOverride, t } from './lang.js'
 import type { ActivityState } from './status.js'
 import type { ActivityStatusEvent } from './events.js'
 // Re-export the event type + SessionEventMap merge: the package root must carry
@@ -54,6 +55,9 @@ export type Config = {
   customActions?: Record<string, string[]>
   /** Inject the `⏵` self-narration contract into the system prompt and surface it. */
   narrate?: boolean
+  /** UI language: `auto` follows `DSH_TUI_LANG` → `~/.dsh-tui/lang.json` →
+   *  OS locale → zh; `zh`/`en` pin the copy directly. */
+  lang?: 'auto' | 'zh' | 'en'
 }
 
 // Explicit annotation: the inferred z.dict output references cosmokit's
@@ -68,6 +72,7 @@ export const Config: Schemastery<Config> = z.object({
   detailLimit: z.number().step(1).min(8).max(120).default(40),
   customActions: z.dict(z.array(z.string())).default({}),
   narrate: z.boolean().default(true),
+  lang: z.union(['auto', 'zh', 'en']).default('auto'),
 })
 
 /** Structural view of the TUI prompt service; the real type lives in dsh-tui. */
@@ -87,11 +92,8 @@ interface ResolvedConfig {
   detailLimit: number
   customActions: Record<string, string[]>
   narrate: boolean
+  lang: 'auto' | 'zh' | 'en'
 }
-
-/** The self-narration contract injected into the system prompt (narrate on). */
-const NARRATE_INSTRUCTION =
-  '[状态栏] 你有一个状态栏展示给用户。【必须】在每个步骤/子任务开始时（不只是调用工具前），在回复正文的最前面单独写一行：⏵ 你在做的具体事情（不超过20字），然后换行继续正常回复。整轮回复只写一行 ⏵，不要重复。信息为主——让人一眼知道你在干什么，风格自然、可以带点俏皮。例：⏵ 修复登录页样式、⏵ 查一下报错原因、⏵ 给补丁跑个验证。切换任务时必须更新。'
 
 /**
  * Wire the working-activity plugin.
@@ -112,8 +114,13 @@ export function apply(ctx: Context, config: Config = {}): void {
     publishIntervalMs: config.publishIntervalMs ?? 2000,
     detailLimit: config.detailLimit ?? 40,
     narrate: config.narrate ?? true,
+    lang: config.lang ?? 'auto',
     customActions: config.customActions ?? {},
   }
+  // A pinned plugin-level language beats the env/file chain; releasing it on
+  // dispose restores `auto` for any other composition in the process.
+  setLangOverride(resolved.lang)
+  ctx.effect(() => () => setLangOverride('auto'), 'working-activity lang override')
   const trackers = new Map<Session, ActivityTracker>()
   let activeSession: Session | undefined
   let lastPublishedLine: string | undefined
@@ -127,13 +134,15 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   // The `⏵` self-narration contract rides the stable system-prompt sections:
   // injected when the systemPrompt service is composed (agent assemblies
-  // always mount it), removed with this fiber.
+  // always mount it), removed with this fiber. The text is resolved at every
+  // assembly in the live language, so a `/lang` switch applies to the next
+  // turn without rebuilding the agent.
   if (resolved.narrate) {
     ctx.inject(['systemPrompt'], (promptCtx) => {
       promptCtx.systemPrompt.section({
         name: 'working-activity:narrate',
         order: 60,
-        text: NARRATE_INSTRUCTION,
+        text: () => t('narrate-instruction'),
       })
     })
   }

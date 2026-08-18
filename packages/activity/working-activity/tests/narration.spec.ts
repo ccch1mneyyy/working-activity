@@ -4,9 +4,15 @@
  * @module @deepseek-ai/dsh-working-activity/tests/narration
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { ActivityTracker, extractNarration, type TrackerConfig } from '../src/status.ts'
+import { setLangOverride } from '../src/lang.ts'
+
+// Deterministic language: the ambient machine may carry DSH_TUI_LANG or a
+// persisted ~/.dsh-tui/lang.json. Pin zh for the legacy assertions.
+beforeEach(() => setLangOverride('zh'))
+afterEach(() => setLangOverride('auto'))
 
 /** Deterministic clock: time advances only when told. */
 function fixedClock(): { now: () => number; advance: (ms: number) => void } {
@@ -147,5 +153,19 @@ describe('ActivityTracker done-line stability', () => {
     expect(later).not.toBe(first) // fragment window expired -> base line
     const again = tracker.render().line
     expect(again).toBe(later) // base line stays stable too
+  })
+})
+
+describe('English narration', () => {
+  it('shows the ⏵ line with an English elapsed suffix', () => {
+    setLangOverride('en')
+    const clock = fixedClock()
+    const tracker = new ActivityTracker(LIVE_CONFIG, clock.now)
+    tracker.onSessionEvent(turnStart(clock.now()))
+    tracker.onSessionEvent(reasoningDelta(clock.now(), '⏵ Inspecting auth'))
+    clock.advance(2000)
+    const state = tracker.render()
+    expect(state.phase).toBe('thinking')
+    expect(state.line).toBe('⏵ Inspecting auth · total 2s')
   })
 })

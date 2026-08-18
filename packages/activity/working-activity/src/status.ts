@@ -8,9 +8,10 @@
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
-  actionFor, fmtDuration, isGitTool, isNight, pickPhrase, thinkingPhrase,
-  WAITING_PHRASES, DONE_PHRASES, FAIL_PHRASES,
+  actionFor, donePhrase, failPhrase, fmtDuration, isGitTool, isNight, thinkingPhrase,
+  waitingPhrase,
 } from './phrases.js'
+import { t } from './lang.js'
 
 /** Public status phases a UI can render. */
 export type ActivityPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
@@ -155,7 +156,7 @@ export class ActivityTracker {
   /** Total tokens reported across the turn's assistant messages. */
   private turnTokens = 0
   /** Completion prefix drawn ONCE at turn end so the done line stays stable. */
-  private donePrefix = '搞定 ✓'
+  private donePrefix = t('done-prefix')
 
   /**
    * @param config - Behavioral knobs.
@@ -290,12 +291,14 @@ export class ActivityTracker {
           this.thinkingMs += Math.max(0, at - this.thinkingStartedAt)
         }
         // Draw the completion prefix ONCE so repeated renders of the done line
-        // stay stable (a fresh random per render would make it flicker).
+        // stay stable (a fresh random per render would make it flicker). The
+        // pools are language-aware, so the line matches the language the turn
+        // ended in.
         const lastTool = this.doneQueue.at(-1)
         if (this.config.phrases) {
-          this.donePrefix = lastTool?.failed ? pickPhrase(FAIL_PHRASES) : pickPhrase(DONE_PHRASES)
+          this.donePrefix = lastTool?.failed ? failPhrase() : donePhrase()
         } else {
-          this.donePrefix = '搞定 ✓'
+          this.donePrefix = t('done-prefix')
         }
         this.setPhase('done', at)
         return
@@ -375,11 +378,12 @@ export class ActivityTracker {
       ? 0
       : this.thinkingMs + Math.max(0, nowMs - this.thinkingStartedAt)
     const elapsed = fmtDuration(this.turnElapsedMs(nowMs))
+    const elapsedLine = t('line-elapsed', { elapsed })
     const narration = this.freshNarration(nowMs)
     if (narration !== null) {
       return {
         phase: this.phase,
-        line: `⏵ ${narration} · 总${elapsed}`,
+        line: `⏵ ${narration} · ${elapsedLine}`,
         phrase: narration,
         toolCount: this.toolCount,
         turnElapsedMs: this.turnElapsedMs(nowMs),
@@ -389,28 +393,29 @@ export class ActivityTracker {
     if (this.config.phrases) {
       if (nowMs - this.phraseChangedAt >= PHRASE_ROTATE_MS) {
         // Waiting (pre-first-token) draws from the waiting pool; thinking
-        // rotates the playful copy pool with night mixing.
+        // rotates the playful copy pool with night mixing. Both pools are
+        // language-aware, so a `/lang` switch shows on the next rotation.
         this.previousPhrase = this.phase === 'waiting'
-          ? pickPhrase(WAITING_PHRASES, this.previousPhrase)
+          ? waitingPhrase(this.previousPhrase)
           : thinkingPhrase(thinkingMs, this.previousPhrase, isNight(new Date(nowMs).getHours()))
         this.phraseChangedAt = nowMs
       }
       const phrase = this.previousPhrase ?? (this.phase === 'waiting'
-        ? pickPhrase(WAITING_PHRASES)
+        ? waitingPhrase()
         : thinkingPhrase(thinkingMs, undefined, isNight(new Date(nowMs).getHours())))
       return {
         phase: this.phase,
-        line: `${phrase} · 总${elapsed}`,
+        line: `${phrase} · ${elapsedLine}`,
         phrase,
         toolCount: this.toolCount,
         turnElapsedMs: this.turnElapsedMs(nowMs),
         phaseStartedAt: this.phaseStartedAt,
       }
     }
-    const label = this.phase === 'waiting' ? '等待模型响应' : '思考中'
+    const label = this.phase === 'waiting' ? t('waiting-label') : t('thinking-label')
     return {
       phase: this.phase,
-      line: `${label} · 总${elapsed}`,
+      line: `${label} · ${elapsedLine}`,
       label,
       toolCount: this.toolCount,
       turnElapsedMs: this.turnElapsedMs(nowMs),
@@ -421,16 +426,21 @@ export class ActivityTracker {
   private doneSummary(nowMs: number): { line: string; phrase?: string } {
     const { thinkingMs, toolMs, toolCount } = this.stats()
     const tokens = this.turnTokens > 0 ? ` · 🔥 ${fmtTokens(this.turnTokens)}` : ''
-    const base = `${this.donePrefix} · ${toolCount} 工具 · 想${fmtDuration(thinkingMs)} 干${fmtDuration(toolMs)}${tokens}`
+    const tools = t(toolCount === 1 ? 'tool-count-one' : 'tool-count-many', { count: toolCount })
+    const summary = t('done-summary', {
+      tools,
+      thinking: fmtDuration(thinkingMs),
+      tooling: fmtDuration(toolMs),
+    })
     if (!this.config.phrases) {
-      return { line: `搞定 ✓ · ${toolCount} 工具 · 想${fmtDuration(thinkingMs)} 干${fmtDuration(toolMs)}${tokens}` }
+      return { line: `${t('done-prefix')} · ${summary}${tokens}` }
     }
     const last = this.doneQueue.at(-1)
     if (last !== undefined && nowMs - last.endedAt < DONE_FRAGMENT_MS) {
       const fragment = toolFragment(last)
-      return { line: `${this.donePrefix} · ${fragment} · ${toolCount} 工具${tokens}`, phrase: this.donePrefix }
+      return { line: `${this.donePrefix} · ${fragment} · ${tools}${tokens}`, phrase: this.donePrefix }
     }
-    return { line: base, ...(this.donePrefix === '搞定 ✓' ? {} : { phrase: this.donePrefix }) }
+    return { line: `${this.donePrefix} · ${summary}${tokens}`, phrase: this.donePrefix }
   }
 
   /** The fresh self-narration line, or null once the stream has been quiet. */

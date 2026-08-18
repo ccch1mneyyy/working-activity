@@ -3,10 +3,18 @@
  * @module @deepseek-ai/dsh-working-activity/tests/phrases
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import {
   actionFor, fmtDuration, isGitTool, isNight, pickPhrase, thinkingPhrase,
+  waitingPhrase,
 } from '../src/phrases.ts'
+import { setLangOverride } from '../src/lang.ts'
+
+// Deterministic language: the ambient machine may have DSH_TUI_LANG or a
+// persisted ~/.dsh-tui/lang.json (the user's own prefs), which would flip
+// the pools mid-suite. Pin zh for the legacy assertions and reset after.
+beforeEach(() => setLangOverride('zh'))
+afterEach(() => setLangOverride('auto'))
 
 describe('pickPhrase', () => {
   it('returns entries from the pool and avoids the previous one', () => {
@@ -92,5 +100,50 @@ describe('isNight', () => {
     expect(isNight(6)).toBe(false)
     expect(isNight(12)).toBe(false)
     expect(isNight(23)).toBe(false)
+  })
+})
+
+describe('English pools', () => {
+  it('draws playful English thinking phrases without Han', () => {
+    setLangOverride('en')
+    const phrases = new Set<string>()
+    for (let i = 0; i < 80; i++) {
+      const phrase = thinkingPhrase(0)
+      expect(phrase).not.toMatch(/\p{Script=Han}/u)
+      phrases.add(phrase)
+    }
+    expect(phrases.size).toBeGreaterThan(5)
+  })
+
+  it('draws English waiting phrases without Han', () => {
+    setLangOverride('en')
+    const phrases = new Set<string>()
+    for (let i = 0; i < 40; i++) {
+      const phrase = waitingPhrase()
+      expect(phrase).not.toMatch(/\p{Script=Han}/u)
+      phrases.add(phrase)
+    }
+    expect(phrases.size).toBeGreaterThan(5)
+  })
+
+  it('maps tools to English verbs without Han', () => {
+    setLangOverride('en')
+    expect(actionFor('bash')).not.toMatch(/\p{Script=Han}/u)
+    expect(actionFor('read_file')).not.toMatch(/\p{Script=Han}/u)
+    expect(actionFor('web_search')).not.toMatch(/\p{Script=Han}/u)
+    expect(actionFor('mystery_tool_xyz')).not.toMatch(/\p{Script=Han}/u)
+  })
+
+  it('keeps user custom pools verbatim in English mode', () => {
+    setLangOverride('en')
+    expect(actionFor('my_deploy', { my_deploy: ['部署一下'] })).toBe('部署一下')
+  })
+
+  it('switches back to zh pools when the language flips', () => {
+    setLangOverride('en')
+    const enVerb = actionFor('read_file')
+    expect(enVerb).not.toMatch(/\p{Script=Han}/u)
+    setLangOverride('zh')
+    expect(actionFor('read_file')).toMatch(/读|看|翻|瞄|康/)
   })
 })
