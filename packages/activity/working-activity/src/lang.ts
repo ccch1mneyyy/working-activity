@@ -57,6 +57,10 @@ const dict = {
   },
   'tool-count-one': { zh: '{{count}} 工具', en: '{{count}} tool' },
   'tool-count-many': { zh: '{{count}} 工具', en: '{{count}} tools' },
+  /** Subagent count in the done summary. */
+  'subagent-count': { zh: '子代理 {{count}} 个', en: '{{count}} subagents' },
+  /** Work-reminder copy after `workRemindAt` turn-hours. */
+  'work-remind': { zh: '已连续工作 {{hours}} 小时，歇会儿？', en: 'Worked {{hours}}h straight — take a break?' },
 } as const
 
 export type I18nKey = keyof typeof dict

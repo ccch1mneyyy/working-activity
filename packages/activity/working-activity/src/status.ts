@@ -8,8 +8,9 @@
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
-  actionFor, donePhrase, failPhrase, fmtDuration, holidayPhrase, isGitTool, isNight,
-  isWeekend, rarePhrase, RARE_CHANCE, thinkingPhrase, weekendPhrase, waitingPhrase,
+  actionFor, compactPhrase, continuePhrase, donePhrase, failPhrase, fmtDuration,
+  holidayPhrase, isGitTool, isNight, isWeekend, modelQuip, overflowPhrase, rarePhrase,
+  RARE_CHANCE, RARE_PHRASES, EN_RARE_PHRASES, thinkingPhrase, weekendPhrase, waitingPhrase,
 } from './phrases.js'
 import { t } from './lang.js'
 
@@ -70,6 +71,10 @@ export interface TrackerConfig {
   readonly features?: TrackerFeatures
   /** User custom phrases appended to the base thinking pool. */
   readonly customPhrases?: readonly string[]
+  /** Show an estimated tokens/s prefix while streaming (pi parity). */
+  readonly showTokPerSec?: boolean
+  /** Work reminder after this many turn-hours (0 = off). */
+  readonly workRemindAt?: number
 }
 
 /** A tool execution in flight. */
@@ -177,6 +182,23 @@ export class ActivityTracker {
   private holidayShown = false
   private rareShown = false
   private weekendShown = false
+  /** One-off copy pinned by an external event (interrupt / model switch /
+   *  compaction / work reminder), shown until it expires. */
+  private pendingPhrase: string | null = null
+  private pendingUntil = 0
+  /** Git branch of the session cwd (fed by the host, best-effort). */
+  private gitBranch: string | undefined
+  /** Consecutive fast tool streak (combo). */
+  private streak = 0
+  private lastToolEndAt = 0
+  private maxStreak = 0
+  /** Subagent (agent/task) calls in the current turn. */
+  private subagentCount = 0
+  /** Work-reminder fired once per turn. */
+  private reminded = false
+  /** Streaming token estimate for the tps prefix. */
+  private tokBuf = 0
+  private tokWindowStart = 0
 
   /**
    * @param config - Behavioral knobs.
@@ -204,6 +226,35 @@ export class ActivityTracker {
     }
   }
 
+  /** The user interrupted the running turn: show a comeback quip next. */
+  onInterrupted(): void {
+    if (!this.config.phrases) return
+    this.pendingPhrase = continuePhrase()
+    this.pendingUntil = this.now() + PENDING_MS
+  }
+
+  /** The model was switched: quip for the new model id. */
+  onModelSwitch(modelId: string): void {
+    if (!this.config.phrases) return
+    const quip = modelQuip(modelId)
+    if (quip !== null) {
+      this.pendingPhrase = quip
+      this.pendingUntil = this.now() + PENDING_MS
+    }
+  }
+
+  /** A context compaction finished (or overflowed): quip about it. */
+  onCompact(kind: 'done' | 'overflow'): void {
+    if (!this.config.phrases) return
+    this.pendingPhrase = kind === 'overflow' ? overflowPhrase() : compactPhrase()
+    this.pendingUntil = this.now() + PENDING_MS
+  }
+
+  /** Feed the session cwd's git branch (best-effort, host-resolved). */
+  onGitBranch(branch: string | undefined): void {
+    this.gitBranch = branch
+  }
+
   /** Consume one durable session event (turn/step/tool/stream). */
   onSessionEvent(event: SessionEvent): void {
     switch (event.type) {
@@ -225,6 +276,14 @@ export class ActivityTracker {
         this.holidayShown = false
         this.rareShown = false
         this.weekendShown = false
+        // Per-turn stats reset; the pending quip (interrupt/model/compact)
+        // survives across the turn boundary so it shows on the next think.
+        this.streak = 0
+        this.maxStreak = 0
+        this.subagentCount = 0
+        this.reminded = false
+        this.tokBuf = 0
+        this.tokWindowStart = at
         this.setPhase('waiting', at)
         return
       }
@@ -245,6 +304,8 @@ export class ActivityTracker {
           this.recentStream = (this.recentStream + chunk.text).slice(-STREAM_BUFFER_CHARS)
           const narration = extractNarration(this.recentStream)
           if (narration !== null) this.narratedText = narration
+          // Streaming token estimate for the tps prefix (pi parity).
+          this.tokBuf += estimateTokens(chunk.text)
         }
         return
       }
@@ -261,6 +322,12 @@ export class ActivityTracker {
         if (this.phase === 'thinking' || this.phase === 'waiting') {
           this.thinkingMs += at - this.thinkingStartedAt
         }
+        // Combo streak: consecutive tools within COMBO_GAP_MS count up.
+        this.streak = (this.lastToolEndAt > 0 && at - this.lastToolEndAt <= COMBO_GAP_MS)
+          ? this.streak + 1
+          : 1
+        if (this.streak > this.maxStreak) this.maxStreak = this.streak
+        if (/^(?:subagent|agent|task)$/i.test(event.data.name)) this.subagentCount += 1
         const parsed = parseArguments(event.data.arguments)
         const action = this.config.phrases ? actionFor(event.data.name, this.customActions) : event.data.name
         const detail = detailFor(event.data.name, parsed, this.config.detailLimit)
@@ -288,6 +355,7 @@ export class ActivityTracker {
         active.endedAt = at
         this.toolMs += at - active.startedAt
         this.toolCount += 1
+        this.lastToolEndAt = at
         this.doneQueue.push({
           action: active.action,
           detail: active.detail,
@@ -361,11 +429,14 @@ export class ActivityTracker {
         }
         const fragment = toolFragment(tool)
         const elapsed = fmtDuration(Math.max(0, nowMs - tool.startedAt))
-        const git = tool.isGit ? ' · git' : ''
+        const git = tool.isGit
+          ? (this.gitBranch !== undefined ? ` · git ${this.gitBranch}` : ' · git')
+          : ''
+        const combo = this.streak >= COMBO_SHOW_AT ? ` · 🔥x${this.streak}` : ''
         const narration = this.freshNarration(nowMs)
         const line = narration === null
-          ? `${fragment} · ${elapsed}${git}`
-          : `⏵ ${narration} · ${fragment} · ${elapsed}${git}`
+          ? `${fragment} · ${elapsed}${git}${combo}`
+          : `⏵ ${narration} · ${fragment} · ${elapsed}${git}${combo}`
         return {
           phase: 'tool',
           line,
@@ -415,7 +486,15 @@ export class ActivityTracker {
       }
     }
     if (this.config.phrases) {
-      if (nowMs - this.phraseChangedAt >= PHRASE_ROTATE_MS) {
+      const pending = this.pendingPhraseAt(nowMs)
+      // Rare eggs linger longer (pi RARE_PHRASE_TICKS ≈ 7.5s).
+      const rotateMs = this.previousPhrase !== undefined && this.isRarePhrase(this.previousPhrase)
+        ? RARE_ROTATE_MS
+        : PHRASE_ROTATE_MS
+      if (pending !== null) {
+        this.previousPhrase = pending
+        this.phraseChangedAt = nowMs
+      } else if (nowMs - this.phraseChangedAt >= rotateMs) {
         // Waiting (pre-first-token) draws from the waiting pool; thinking
         // rotates the egg-aware lively pool (holiday / rare / weekend /
         // night). Both pools are language-aware, so a `/lang` switch shows
@@ -428,9 +507,12 @@ export class ActivityTracker {
       const phrase = this.previousPhrase ?? (this.phase === 'waiting'
         ? waitingPhrase()
         : this.livelyPhrase(thinkingMs, nowMs))
+      // Ellipsis breathing (pi DOT_FRAMES) + optional estimated tps prefix.
+      const dots = DOT_FRAMES[Math.floor(nowMs / TICK_MS) % DOT_FRAMES.length]
+      const tps = this.tpsPrefix(nowMs)
       return {
         phase: this.phase,
-        line: `${phrase} · ${elapsedLine}`,
+        line: `${tps}${phrase}${dots} · ${elapsedLine}`,
         phrase,
         toolCount: this.toolCount,
         turnElapsedMs: this.turnElapsedMs(nowMs),
@@ -480,9 +562,43 @@ export class ActivityTracker {
     )
   }
 
+  /** The pending one-off quip (interrupt / model / compact / work reminder)
+   *  while it is still fresh; expired pending is cleared here. */
+  private pendingPhraseAt(nowMs: number): string | null {
+    if (this.pendingPhrase !== null) {
+      if (nowMs < this.pendingUntil) return this.pendingPhrase
+      this.pendingPhrase = null
+    }
+    const remindAt = this.config.workRemindAt ?? 0
+    if (!this.reminded && remindAt > 0) {
+      const hours = this.turnElapsedMs(nowMs) / 3_600_000
+      if (hours >= remindAt) {
+        this.reminded = true
+        return t('work-remind', { hours: Math.floor(hours) })
+      }
+    }
+    return null
+  }
+
+  /** Whether a phrase comes from the rare pool (longer display window). */
+  private isRarePhrase(phrase: string): boolean {
+    return RARE_PHRASES.includes(phrase) || EN_RARE_PHRASES.includes(phrase)
+  }
+
+  /** Estimated tokens/s while the stream is fresh (pi parity, opt-in). */
+  private tpsPrefix(nowMs: number): string {
+    if (!this.config.showTokPerSec || this.tokBuf <= 0) return ''
+    if (nowMs - this.lastChunkAt > TPS_WINDOW_MS) return ''
+    const windowSec = Math.max(1, (nowMs - this.tokWindowStart) / 1000)
+    const tps = Math.round(this.tokBuf / windowSec)
+    return tps > 0 ? `~${tps} tok/s · ` : ''
+  }
+
   private doneSummary(nowMs: number): { line: string; phrase?: string } {
     const { thinkingMs, toolMs, toolCount } = this.stats()
     const tokens = this.turnTokens > 0 ? ` · 🔥 ${fmtTokens(this.turnTokens)}` : ''
+    const sub = this.subagentCount > 0 ? ` · ${t('subagent-count', { count: this.subagentCount })}` : ''
+    const combo = this.maxStreak >= COMBO_SHOW_AT ? ` · 🔥x${this.maxStreak}` : ''
     const tools = t(toolCount === 1 ? 'tool-count-one' : 'tool-count-many', { count: toolCount })
     const summary = t('done-summary', {
       tools,
@@ -490,14 +606,14 @@ export class ActivityTracker {
       tooling: fmtDuration(toolMs),
     })
     if (!this.config.phrases) {
-      return { line: `${t('done-prefix')} · ${summary}${tokens}` }
+      return { line: `${t('done-prefix')} · ${summary}${sub}${combo}${tokens}` }
     }
     const last = this.doneQueue.at(-1)
     if (last !== undefined && nowMs - last.endedAt < DONE_FRAGMENT_MS) {
       const fragment = toolFragment(last)
-      return { line: `${this.donePrefix} · ${fragment} · ${tools}${tokens}`, phrase: this.donePrefix }
+      return { line: `${this.donePrefix} · ${fragment} · ${tools}${sub}${combo}${tokens}`, phrase: this.donePrefix }
     }
-    return { line: `${this.donePrefix} · ${summary}${tokens}`, phrase: this.donePrefix }
+    return { line: `${this.donePrefix} · ${summary}${sub}${combo}${tokens}`, phrase: this.donePrefix }
   }
 
   /** The fresh self-narration line, or null once the stream has been quiet. */
@@ -527,6 +643,20 @@ export class ActivityTracker {
 
 /** Rotate the thinking phrase every N render ticks (render cadence ≈ 500ms → ~4s). */
 const PHRASE_ROTATE_MS = 4000
+/** Rare easter-egg phrases linger this long before rotation (pi ≈ 7.5s). */
+const RARE_ROTATE_MS = 7500
+/** One-off quips (interrupt / model / compact) display window. */
+const PENDING_MS = 6000
+/** Tools closer than this count as one combo streak. */
+const COMBO_GAP_MS = 10_000
+/** Streak at which the combo badge shows. */
+const COMBO_SHOW_AT = 2
+/** The tps estimate stays fresh this long after the last chunk. */
+const TPS_WINDOW_MS = 3500
+/** Render tick cadence (matches the TUI's 500ms activity timer). */
+const TICK_MS = 500
+/** Ellipsis breathing frames appended to thinking lines (pi parity). */
+const DOT_FRAMES = ['', ' ·', ' ··', ' ···', ' ··', ' ·']
 /** Cap on replayed done cards; older entries drop. */
 const DONE_QUEUE_MAX = 6
 /** Show the last tool's fragment in the done line for this long after it ends. */
@@ -551,6 +681,14 @@ function fmtTokens(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
   if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`
   return String(tokens)
+}
+
+/** Coarse streaming token estimate (pi parity: CJK ×1.5, others ÷4). */
+function estimateTokens(text: string): number {
+  const compact = text.replace(/\s/g, '')
+  if (compact.length === 0) return 0
+  const cjkCount = (compact.match(/[\u3400-\u9fff]/g) ?? []).length
+  return Math.max(1, Math.ceil(cjkCount * 1.5 + (compact.length - cjkCount) / 4))
 }
 
 /** Parse a tool call's raw arguments JSON defensively. */

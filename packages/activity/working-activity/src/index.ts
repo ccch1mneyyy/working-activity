@@ -68,6 +68,10 @@ export type Config = {
   features?: Record<string, boolean>
   /** Extra thinking phrases appended to the base pool. */
   customPhrases?: string[]
+  /** Show an estimated tokens/s prefix while streaming. */
+  showTokPerSec?: boolean
+  /** Work reminder after this many turn-hours (0 = off). */
+  workRemindAt?: number
 }
 
 // Explicit annotation: the inferred z.dict output references cosmokit's
@@ -87,6 +91,8 @@ export const Config: Schemastery<Config> = z.object({
   mode: z.union(['lively', 'minimal']).default('lively'),
   features: z.dict(z.boolean()).default({}),
   customPhrases: z.array(z.string()).default([]),
+  showTokPerSec: z.boolean().default(false),
+  workRemindAt: z.number().min(0).max(24).default(0),
 })
 
 /** Structural view of the TUI prompt service; the real type lives in dsh-tui. */
@@ -111,6 +117,8 @@ interface ResolvedConfig {
   mode: 'lively' | 'minimal'
   features: Record<string, boolean>
   customPhrases: string[]
+  showTokPerSec: boolean
+  workRemindAt: number
 }
 
 /**
@@ -139,6 +147,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     mode: config.mode ?? 'lively',
     features: config.features ?? {},
     customPhrases: config.customPhrases ?? [],
+    showTokPerSec: config.showTokPerSec ?? false,
+    workRemindAt: config.workRemindAt ?? 0,
   }
   // A pinned plugin-level language beats the env/file chain; releasing it on
   // dispose restores `auto` for any other composition in the process.
@@ -180,6 +190,8 @@ export function apply(ctx: Context, config: Config = {}): void {
           showIdle: false,
           features: resolved.features,
           customPhrases: resolved.customPhrases,
+          showTokPerSec: resolved.showTokPerSec,
+          workRemindAt: resolved.workRemindAt,
         },
         Date.now,
         resolved.customActions,

@@ -339,3 +339,131 @@ describe('ActivityTracker easter eggs', () => {
     expect(seen).toContain('自定义一条')
   })
 })
+
+describe('ActivityTracker one-off quips and live extras', () => {
+  /** Clock pinned to an ordinary weekday noon (2026-03-16, Monday). */
+  function mondayClock(): { now: () => number; advance: (ms: number) => void } {
+    let current = new Date('2026-03-16T12:00:00').getTime()
+    return {
+      now: () => current,
+      advance: (ms: number) => { current += ms },
+    }
+  }
+
+  const EGG_FREE_CONFIG: TrackerConfig = {
+    phrases: true, detailLimit: 40, showIdle: false,
+    features: { rareEggs: false, weekend: false, holidays: false },
+  }
+
+  /** Drive a tracker to the thinking phase at the current clock time. */
+  function startThinking(tracker: ActivityTracker, clock: { now: () => number }): void {
+    tracker.onSessionEvent(turnStart(clock.now()))
+    tracker.onSessionEvent(reasoningDelta(clock.now()))
+  }
+
+  it('shows the interrupt quip once, then normal copy', () => {
+    const clock = mondayClock()
+    const tracker = new ActivityTracker(EGG_FREE_CONFIG, clock.now)
+    startThinking(tracker, clock)
+    tracker.onInterrupted()
+    const quip = tracker.render()
+    expect(phrases.CONTINUE_PHRASES).toContain(quip.phrase)
+
+    // Expired → normal copy on the next rotation.
+    clock.advance(10_000)
+    expect(phrases.CONTINUE_PHRASES).not.toContain(tracker.render().phrase)
+  })
+
+  it('shows the model-switch quip for a known model id', () => {
+    const clock = mondayClock()
+    const tracker = new ActivityTracker(EGG_FREE_CONFIG, clock.now)
+    startThinking(tracker, clock)
+    tracker.onModelSwitch('deepseek-chat')
+    expect(phrases.MODEL_QUIPS.deepseek).toContain(tracker.render().phrase)
+  })
+
+  it('ignores unknown model ids', () => {
+    const clock = mondayClock()
+    const tracker = new ActivityTracker(EGG_FREE_CONFIG, clock.now)
+    startThinking(tracker, clock)
+    const before = tracker.render().phrase
+    tracker.onModelSwitch('no-such-model-xyz')
+    expect(tracker.render().phrase).toBe(before)
+  })
+
+  it('shows the compaction quip', () => {
+    const clock = mondayClock()
+    const tracker = new ActivityTracker(EGG_FREE_CONFIG, clock.now)
+    startThinking(tracker, clock)
+    tracker.onCompact('done')
+    expect(phrases.COMPACT_PHRASES).toContain(tracker.render().phrase)
+    tracker.onCompact('overflow')
+    expect(phrases.OVERFLOW_PHRASES).toContain(tracker.render().phrase)
+  })
+
+  it('shows the git branch on git tools when fed', () => {
+    const clock = mondayClock()
+    const tracker = new ActivityTracker(EGG_FREE_CONFIG, clock.now)
+    startThinking(tracker, clock)
+    tracker.onGitBranch('main')
+    tracker.onSessionEvent(toolCall(clock.now(), 'c1', 'git', '{}'))
+    expect(tracker.render().line).toContain('git main')
+  })
+
+  it('shows the combo badge on consecutive fast tools', () => {
+    const clock = mondayClock()
+    const tracker = new ActivityTracker(EGG_FREE_CONFIG, clock.now)
+    startThinking(tracker, clock)
+    tracker.onSessionEvent(toolCall(clock.now(), 'c1', 'bash', '{}'))
+    clock.advance(1000)
+    tracker.onSessionEvent(toolResult(clock.now(), 'c1'))
+    clock.advance(1000)
+    tracker.onSessionEvent(toolCall(clock.now(), 'c2', 'grep', '{}'))
+    expect(tracker.render().line).toContain('🔥x2')
+  })
+
+  it('counts subagents in the done summary', () => {
+    const clock = mondayClock()
+    const tracker = new ActivityTracker(EGG_FREE_CONFIG, clock.now)
+    startThinking(tracker, clock)
+    tracker.onSessionEvent(toolCall(clock.now(), 'c1', 'subagent', '{}'))
+    clock.advance(1000)
+    tracker.onSessionEvent(toolResult(clock.now(), 'c1'))
+    clock.advance(1000)
+    tracker.onSessionEvent(turnEnd(clock.now()))
+    clock.advance(5000)
+    expect(tracker.render().line).toContain('子代理 1 个')
+  })
+
+  it('shows an estimated tps prefix while streaming', () => {
+    const clock = mondayClock()
+    const tracker = new ActivityTracker({ ...EGG_FREE_CONFIG, showTokPerSec: true }, clock.now)
+    tracker.onSessionEvent(turnStart(clock.now()))
+    tracker.onSessionEvent(eventAt('assistant/chunk', clock.now(), {
+      turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: '中文中文中文' },
+    }))
+    expect(tracker.render().line).toMatch(/~?\d+ tok\/s/)
+  })
+
+  it('fires the work reminder once after the threshold hours', () => {
+    const clock = mondayClock()
+    const tracker = new ActivityTracker({ ...EGG_FREE_CONFIG, workRemindAt: 1 }, clock.now)
+    startThinking(tracker, clock)
+    clock.advance(3_700_000) // > 1h
+    const reminded = tracker.render()
+    expect(reminded.phrase).toMatch(/小时|hour/)
+    clock.advance(10_000)
+    expect(tracker.render().phrase).not.toMatch(/小时|hour/)
+  })
+
+  it('breathes an ellipsis on the thinking line', () => {
+    const clock = mondayClock()
+    const tracker = new ActivityTracker(EGG_FREE_CONFIG, clock.now)
+    startThinking(tracker, clock)
+    const first = tracker.render().line
+    clock.advance(500)
+    const second = tracker.render().line
+    expect(first).not.toBe(second)
+    expect(second).toMatch(/ ·{1,3} · 总| ·{1,3}$/)
+  })
+})
