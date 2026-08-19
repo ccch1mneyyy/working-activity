@@ -7,6 +7,7 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { ActivityTracker, type TrackerConfig } from '../src/status.ts'
+import * as phrases from '../src/phrases.ts'
 import { setLangOverride } from '../src/lang.ts'
 
 // Deterministic language: the ambient machine may carry DSH_TUI_LANG or a
@@ -255,5 +256,86 @@ describe('ActivityTracker English mode', () => {
     expect(tracker.render().line).toContain('Waiting for model')
     setLangOverride('zh')
     expect(tracker.render().line).toBe('等待模型响应 · 总1s')
+  })
+})
+
+describe('ActivityTracker easter eggs', () => {
+  const NEW_YEAR_POOL = phrases.HOLIDAY_PHRASES['01-01'] as readonly string[]
+
+  /** Clock pinned to a holiday noon (2026-01-01, Thursday, 12:00). */
+  function holidayClock(): { now: () => number; advance: (ms: number) => void } {
+    let current = new Date('2026-01-01T12:00:00').getTime()
+    return {
+      now: () => current,
+      advance: (ms: number) => { current += ms },
+    }
+  }
+
+  /** Clock pinned to an ordinary weekday noon (2026-03-16, Monday). */
+  function mondayClock(): { now: () => number; advance: (ms: number) => void } {
+    let current = new Date('2026-03-16T12:00:00').getTime()
+    return {
+      now: () => current,
+      advance: (ms: number) => { current += ms },
+    }
+  }
+
+  const EGG_FREE_CONFIG: TrackerConfig = {
+    phrases: true, detailLimit: 40, showIdle: false,
+    features: { rareEggs: false, weekend: false, holidays: false },
+  }
+
+  it('shows a holiday phrase once per turn, then normal copy', () => {
+    const clock = holidayClock()
+    const tracker = new ActivityTracker({
+      phrases: true, detailLimit: 40, showIdle: false,
+      features: { rareEggs: false, weekend: false },
+    }, clock.now)
+    tracker.onSessionEvent(turnStart(clock.now()))
+    tracker.onSessionEvent(reasoningDelta(clock.now()))
+    const first = tracker.render()
+    expect(NEW_YEAR_POOL).toContain(first.phrase)
+
+    // Next rotation (> PHRASE_ROTATE_MS) draws normal copy, not the holiday.
+    clock.advance(10_000)
+    const second = tracker.render()
+    expect(NEW_YEAR_POOL).not.toContain(second.phrase)
+
+    // A new turn can roll the egg again (advance past the rotation window).
+    clock.advance(1000)
+    tracker.onSessionEvent(turnStart(clock.now()))
+    tracker.onSessionEvent(reasoningDelta(clock.now()))
+    clock.advance(5000)
+    expect(NEW_YEAR_POOL).toContain(tracker.render().phrase)
+  })
+
+  it('skips holiday copy when the feature is off', () => {
+    const clock = holidayClock()
+    const tracker = new ActivityTracker({
+      ...EGG_FREE_CONFIG, features: { ...EGG_FREE_CONFIG.features, holidays: true },
+    }, clock.now)
+    tracker.onSessionEvent(turnStart(clock.now()))
+    tracker.onSessionEvent(reasoningDelta(clock.now()))
+    expect(NEW_YEAR_POOL).toContain(tracker.render().phrase)
+    const off = new ActivityTracker(EGG_FREE_CONFIG, clock.now)
+    off.onSessionEvent(turnStart(clock.now()))
+    off.onSessionEvent(reasoningDelta(clock.now()))
+    expect(NEW_YEAR_POOL).not.toContain(off.render().phrase)
+  })
+
+  it('merges custom phrases into thinking copy', () => {
+    const clock = mondayClock()
+    const tracker = new ActivityTracker({
+      ...EGG_FREE_CONFIG, customPhrases: ['自定义一条'],
+    }, clock.now)
+    tracker.onSessionEvent(turnStart(clock.now()))
+    tracker.onSessionEvent(reasoningDelta(clock.now()))
+    const seen = new Set<string>()
+    for (let i = 0; i < 800; i++) {
+      clock.advance(5000)
+      const phrase = tracker.render().phrase
+      if (phrase !== undefined) seen.add(phrase)
+    }
+    expect(seen).toContain('自定义一条')
   })
 })

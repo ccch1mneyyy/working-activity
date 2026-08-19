@@ -25,6 +25,7 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import { ActivityTracker } from './status.js'
 import { registerActivityEventType } from './registration.js'
 import { setLangOverride, t } from './lang.js'
+import { DEFAULT_PRESET } from './frames.js'
 import type { ActivityState } from './status.js'
 import type { ActivityStatusEvent } from './events.js'
 // Re-export the event type + SessionEventMap merge: the package root must carry
@@ -58,6 +59,15 @@ export type Config = {
   /** UI language: `auto` follows `DSH_TUI_LANG` → `~/.dsh-tui/lang.json` →
    *  OS locale → zh; `zh`/`en` pin the copy directly. */
   lang?: 'auto' | 'zh' | 'en'
+  /** Default frame preset name (informational for UI consumers; the TUI
+   *  resolves the persisted `frames` choice itself). */
+  frames?: string
+  /** lively: full flourish (default) / minimal: functional labels only. */
+  mode?: 'lively' | 'minimal'
+  /** Per-feature switches; explicit values override `mode` defaults. */
+  features?: Record<string, boolean>
+  /** Extra thinking phrases appended to the base pool. */
+  customPhrases?: string[]
 }
 
 // Explicit annotation: the inferred z.dict output references cosmokit's
@@ -73,6 +83,10 @@ export const Config: Schemastery<Config> = z.object({
   customActions: z.dict(z.array(z.string())).default({}),
   narrate: z.boolean().default(true),
   lang: z.union(['auto', 'zh', 'en']).default('auto'),
+  frames: z.string().default(DEFAULT_PRESET),
+  mode: z.union(['lively', 'minimal']).default('lively'),
+  features: z.dict(z.boolean()).default({}),
+  customPhrases: z.array(z.string()).default([]),
 })
 
 /** Structural view of the TUI prompt service; the real type lives in dsh-tui. */
@@ -93,6 +107,10 @@ interface ResolvedConfig {
   customActions: Record<string, string[]>
   narrate: boolean
   lang: 'auto' | 'zh' | 'en'
+  frames: string
+  mode: 'lively' | 'minimal'
+  features: Record<string, boolean>
+  customPhrases: string[]
 }
 
 /**
@@ -108,7 +126,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   // in processes where publishing itself is off. See registration.ts.
   registerActivityEventType()
   const resolved: ResolvedConfig = {
-    phrases: config.phrases ?? true,
+    // `mode: minimal` renders functional labels only (pi extension parity).
+    phrases: config.phrases ?? config.mode !== 'minimal',
     publish: config.publish ?? false,
     tickMs: config.tickMs ?? 500,
     publishIntervalMs: config.publishIntervalMs ?? 2000,
@@ -116,6 +135,10 @@ export function apply(ctx: Context, config: Config = {}): void {
     narrate: config.narrate ?? true,
     lang: config.lang ?? 'auto',
     customActions: config.customActions ?? {},
+    frames: config.frames ?? DEFAULT_PRESET,
+    mode: config.mode ?? 'lively',
+    features: config.features ?? {},
+    customPhrases: config.customPhrases ?? [],
   }
   // A pinned plugin-level language beats the env/file chain; releasing it on
   // dispose restores `auto` for any other composition in the process.
@@ -151,7 +174,13 @@ export function apply(ctx: Context, config: Config = {}): void {
     let tracker = trackers.get(session)
     if (tracker === undefined) {
       tracker = new ActivityTracker(
-        { phrases: resolved.phrases, detailLimit: resolved.detailLimit, showIdle: false },
+        {
+          phrases: resolved.phrases,
+          detailLimit: resolved.detailLimit,
+          showIdle: false,
+          features: resolved.features,
+          customPhrases: resolved.customPhrases,
+        },
         Date.now,
         resolved.customActions,
       )

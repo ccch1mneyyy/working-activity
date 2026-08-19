@@ -8,8 +8,8 @@
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
-  actionFor, donePhrase, failPhrase, fmtDuration, isGitTool, isNight, thinkingPhrase,
-  waitingPhrase,
+  actionFor, donePhrase, failPhrase, fmtDuration, holidayPhrase, isGitTool, isNight,
+  isWeekend, rarePhrase, RARE_CHANCE, thinkingPhrase, weekendPhrase, waitingPhrase,
 } from './phrases.js'
 import { t } from './lang.js'
 
@@ -46,6 +46,18 @@ export interface TurnStats {
   readonly toolCount: number
 }
 
+/** Easter-egg toggles for the thinking phrase (pi extension parity). */
+export interface TrackerFeatures {
+  /** Rare 1/150 easter eggs. */
+  readonly rareEggs?: boolean
+  /** Weekend greetings on Sat/Sun. */
+  readonly weekend?: boolean
+  /** Date-matched holiday / Lunar New Year copy. */
+  readonly holidays?: boolean
+  /** Night-owl copy between 00:00 and 06:00. */
+  readonly nightPhrases?: boolean
+}
+
 /** Configuration knobs for the state machine (subset of plugin Config). */
 export interface TrackerConfig {
   /** Playful copy pool on/off; false renders plain functional labels. */
@@ -54,6 +66,10 @@ export interface TrackerConfig {
   readonly detailLimit: number
   /** Hide the status line while idle. */
   readonly showIdle: boolean
+  /** Easter-egg toggles; absent flags default to on. */
+  readonly features?: TrackerFeatures
+  /** User custom phrases appended to the base thinking pool. */
+  readonly customPhrases?: readonly string[]
 }
 
 /** A tool execution in flight. */
@@ -157,6 +173,10 @@ export class ActivityTracker {
   private turnTokens = 0
   /** Completion prefix drawn ONCE at turn end so the done line stays stable. */
   private donePrefix = t('done-prefix')
+  /** Easter eggs shown once per turn (holiday / rare / weekend). */
+  private holidayShown = false
+  private rareShown = false
+  private weekendShown = false
 
   /**
    * @param config - Behavioral knobs.
@@ -201,6 +221,10 @@ export class ActivityTracker {
         this.narratedText = null
         this.lastChunkAt = 0
         this.recentStream = ''
+        // Easter eggs are once-per-turn: a fresh turn can roll them again.
+        this.holidayShown = false
+        this.rareShown = false
+        this.weekendShown = false
         this.setPhase('waiting', at)
         return
       }
@@ -393,16 +417,17 @@ export class ActivityTracker {
     if (this.config.phrases) {
       if (nowMs - this.phraseChangedAt >= PHRASE_ROTATE_MS) {
         // Waiting (pre-first-token) draws from the waiting pool; thinking
-        // rotates the playful copy pool with night mixing. Both pools are
-        // language-aware, so a `/lang` switch shows on the next rotation.
+        // rotates the egg-aware lively pool (holiday / rare / weekend /
+        // night). Both pools are language-aware, so a `/lang` switch shows
+        // on the next rotation.
         this.previousPhrase = this.phase === 'waiting'
           ? waitingPhrase(this.previousPhrase)
-          : thinkingPhrase(thinkingMs, this.previousPhrase, isNight(new Date(nowMs).getHours()))
+          : this.livelyPhrase(thinkingMs, nowMs)
         this.phraseChangedAt = nowMs
       }
       const phrase = this.previousPhrase ?? (this.phase === 'waiting'
         ? waitingPhrase()
-        : thinkingPhrase(thinkingMs, undefined, isNight(new Date(nowMs).getHours())))
+        : this.livelyPhrase(thinkingMs, nowMs))
       return {
         phase: this.phase,
         line: `${phrase} · ${elapsedLine}`,
@@ -421,6 +446,38 @@ export class ActivityTracker {
       turnElapsedMs: this.turnElapsedMs(nowMs),
       phaseStartedAt: this.phaseStartedAt,
     }
+  }
+
+  /**
+   * Pick the next thinking phrase with the pi extension's egg order:
+   * holiday (once per turn) → rare 1/150 (once per turn) → weekend greeting
+   * (once per turn) → elapsed-time tiers with night mixing. Every egg is
+   * gated by `config.features` (absent flags default to on).
+   */
+  private livelyPhrase(thinkingMs: number, nowMs: number): string {
+    const features = this.config.features ?? {}
+    const now = new Date(nowMs)
+    if (features.holidays !== false && !this.holidayShown) {
+      const holiday = holidayPhrase(now)
+      if (holiday !== null) {
+        this.holidayShown = true
+        return holiday
+      }
+    }
+    if (features.rareEggs !== false && !this.rareShown && Math.random() < RARE_CHANCE) {
+      this.rareShown = true
+      return rarePhrase(this.previousPhrase)
+    }
+    if (features.weekend !== false && !this.weekendShown && isWeekend(now)) {
+      this.weekendShown = true
+      return weekendPhrase(this.previousPhrase)
+    }
+    return thinkingPhrase(
+      thinkingMs,
+      this.previousPhrase,
+      features.nightPhrases !== false && isNight(now.getHours()),
+      this.config.customPhrases,
+    )
   }
 
   private doneSummary(nowMs: number): { line: string; phrase?: string } {

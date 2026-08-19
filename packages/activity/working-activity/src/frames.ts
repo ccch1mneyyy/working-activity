@@ -1,0 +1,138 @@
+/**
+ * Working-activity indicator frame presets — the single home for every
+ * spinner animation, ported from the pi working-activity extension
+ * (`FRAME_PRESETS`) plus the dsh-tui additions (moon8 / rainbow / whale
+ * family / clock / traffic lights). Consumers (TUI row, Web slot) render the
+ * current frame next to the live working line; the preset name is chosen by
+ * the UI and persisted in `working-activity.json` (`frames` key).
+ *
+ * `\uFE0E` forces text rendering so Windows never paints the glyphs as color
+ * emoji (the green-block problem); emoji presets (moon8, clock, whales)
+ * deliberately omit it to keep colorful rendering on modern terminals.
+ * @module @deepseek-ai/dsh-working-activity/frames
+ */
+
+/** Text-variant selector: keep symbols monochrome on Windows. */
+const TE = '\uFE0E'
+
+/** One working-activity preset: the frame sequence and the per-frame interval. */
+export interface FramePreset {
+  readonly frames: readonly string[]
+  readonly intervalMs: number
+}
+
+/** Named working-activity frame presets, keyed by preset name (`claude`, `moon`, `sand`, ...). */
+export const FRAME_PRESETS: Record<string, FramePreset> = {
+  // Claude Code's real sequence: · ✢ * ✶ ✻ ✽ forward + backward.
+  claude: {
+    frames: ['·', `✢${TE}`, '*', `✶${TE}`, `✻${TE}`, `✽${TE}`, `✻${TE}`, `✶${TE}`, '*', `✢${TE}`],
+    intervalMs: 150,
+  },
+  star2: { frames: [`✶${TE}`, `✸${TE}`, `✹${TE}`, `✺${TE}`, `✹${TE}`, `✷${TE}`], intervalMs: 140 },
+  sand: {
+    frames: ['⠁', '⠂', '⠄', '⡀', '⡈', '⡐', '⡠', '⣀', '⣁', '⣂', '⣄', '⣌', '⣔', '⣤', '⣥', '⣦', '⣮', '⣶', '⣷', '⣿', '⡿', '⠿', '⢟', '⠟', '⡛', '⠛', '⠫', '⢋', '⠋', '⠍', '⡉', '⠉', '⠑', '⠡', '⢁'],
+    intervalMs: 120,
+  },
+  triangle: { frames: ['◢', '◣', '◤', '◥'], intervalMs: 180 },
+  box: { frames: ['▖', '▘', '▝', '▗'], intervalMs: 180 },
+  box2: { frames: ['▌', '▀', '▐', '▄'], intervalMs: 180 },
+  corners: { frames: ['◰', '◳', '◲', '◱'], intervalMs: 190 },
+  point: { frames: ['∙∙∙', '●∙∙', '∙●∙', '∙∙●', '∙∙∙'], intervalMs: 190 },
+  layer: { frames: ['-', '=', '≡'], intervalMs: 220 },
+  flip: { frames: ['_', '_', '_', '-', '`', '`', "'", '´', '-', '_', '_', '_'], intervalMs: 140 },
+  aesthetic: {
+    frames: ['▰▱▱▱▱▱▱', '▰▰▱▱▱▱▱', '▰▰▰▱▱▱▱', '▰▰▰▰▱▱▱', '▰▰▰▰▰▱▱', '▰▰▰▰▰▰▱', '▰▰▰▰▰▰▰', '▰▱▱▱▱▱▱'],
+    intervalMs: 140,
+  },
+  hamburger: { frames: ['☱', '☲', '☴'], intervalMs: 220 },
+  moon: { frames: ['◐', '◓', '◑', '◒'], intervalMs: 240 },
+  // kimi-code MoonLoader 同款：8 帧 emoji 月相，120ms 一帧，比半圆版更丝滑。
+  // 不带 \uFE0E：保留彩色 emoji 渲染（Windows Terminal 等现代终端效果最佳）。
+  moon8: { frames: ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'], intervalMs: 120 },
+  // 鲸鱼喷水：🐳 固定，水柱升起（· → | → ║）再回落，顶珠 ° 模拟水花（对齐 pi 版）。
+  'whale-spout': {
+    frames: ['🐳  ', '🐳° ', '🐳|°', '🐳║°', '🐳|°', '🐳° ', '🐳  '],
+    intervalMs: 160,
+  },
+  // 鲸鱼转圈：🐳 + 环绕方向指示（逆时针转圈语义，对齐 pi 版）。
+  'whale-spin': {
+    frames: ['🐳→', '🐳↘', '🐳↓', '🐳↙', '🐳←', '🐳↖', '🐳↑', '🐳↗'],
+    intervalMs: 150,
+  },
+  // 鲸鱼吐泡泡：🐳 固定，泡泡从头顶冒出（大泡 ○ 先行、小泡 ∘ 跟上）向右飘走。
+  'whale-bubbles': {
+    frames: ['🐳  ', '🐳○ ', '🐳 ○', '🐳  ', '🐳∘ ', '🐳 ∘', '🐳  '],
+    intervalMs: 170,
+  },
+  // 时钟：12 个整点表盘循环（🕛 → 🕚），emoji 彩色渲染（同 moon8，不带 \uFE0E）。
+  clock: {
+    frames: ['🕛', '🕐', '🕑', '🕒', '🕓', '🕔', '🕕', '🕖', '🕗', '🕘', '🕙', '🕚'],
+    intervalMs: 300,
+  },
+  // 红绿灯：🔴 → 🟡 → 🟢 循环，一轮 1.2s，节奏从容。
+  traffic_lights: {
+    frames: ['🔴', '🟡', '🟢'],
+    intervalMs: 400,
+  },
+  comet: {
+    frames: ['●    ', ' ●   ', '  ●  ', '   ● ', '    ●', '   ● ', '  ●  ', ' ●   '],
+    intervalMs: 160,
+  },
+  breathe: { frames: ['▁', '▃', '▅', '▇', '▅', '▃'], intervalMs: 210 },
+  dots: { frames: ['⣾', '⣷', '⣯', '⣟', '⡿', '⢿', '⣻', '⣽'], intervalMs: 140 },
+  arrow: { frames: ['←', '↖', '↑', '↗', '→', '↘', '↓', '↙'], intervalMs: 160 },
+  spark: { frames: ['·', '∘', '°', '✧', '°', '∘'], intervalMs: 240 },
+  bar: { frames: ['▏', '▎', '▍', '▌', '▋', '▊', '▉', '█', '▉', '▊', '▋', '▌', '▍', '▎'], intervalMs: 120 },
+  braille: { frames: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'], intervalMs: 120 },
+  arc: { frames: ['◜', '◠', '◝', '◞', '◡', '◟'], intervalMs: 160 },
+  circle: { frames: ['◴', '◷', '◶', '◵'], intervalMs: 190 },
+  grow: { frames: ['.', 'o', 'O', '0', 'O', 'o'], intervalMs: 210 },
+  noise: { frames: ['▓', '▒', '░', '▒'], intervalMs: 160 },
+  bounce: { frames: ['⠁', '⠂', '⠄', '⡀', '⢀', '⠠', '⠐', '⠈'], intervalMs: 140 },
+  rainbow: {
+    frames: ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█', '▇', '▆', '▅', '▄', '▃', '▂'],
+    intervalMs: 120,
+  },
+  // 双端进度条往返（pi 版独有，补全并集）。
+  bar2: {
+    frames: [
+      '[    ]', '[=   ]', '[==  ]', '[=== ]', '[ ===]',
+      '[  ==]', '[   =]', '[    ]', '[   =]', '[  ==]',
+      '[ ===]', '[=== ]', '[==  ]', '[=   ]',
+    ],
+    intervalMs: 140,
+  },
+  dqpb: { frames: ['d', 'q', 'p', 'b'], intervalMs: 210 },
+  toggle: { frames: ['⊶', '⊷'], intervalMs: 300 },
+}
+
+/** The default preset (moon8: the smoothest of the emoji moons). */
+export const DEFAULT_PRESET = 'moon8'
+
+/** Every selectable preset name, `random` first (the pi selector order). */
+export const PRESET_NAMES: readonly string[] = ['random', ...Object.keys(FRAME_PRESETS)]
+
+/**
+ * Whether `name` selects a known preset or `random`.
+ * @param name - Candidate preset name.
+ * @returns True when the name resolves to a preset.
+ */
+export function isPresetName(name: string): boolean {
+  return name === 'random' || Object.hasOwn(FRAME_PRESETS, name)
+}
+
+/**
+ * Resolve a preset name (`random` picks one per process).
+ * @param name - Preset name, or undefined for the default.
+ * @returns The matching preset; unknown or absent names fall back to the default.
+ */
+export function resolvePreset(name: string | undefined): FramePreset {
+  if (name === 'random') {
+    const names = Object.keys(FRAME_PRESETS)
+    // FRAME_PRESETS is non-empty by construction, so any random index is in
+    // range and the lookup always lands on a preset.
+    const pick = names[Math.floor(Math.random() * names.length)]
+    return FRAME_PRESETS[pick]
+  }
+  return FRAME_PRESETS[name ?? ''] ?? FRAME_PRESETS[DEFAULT_PRESET]
+}

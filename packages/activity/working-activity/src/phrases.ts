@@ -43,7 +43,7 @@ export const THINKING_PHRASES: readonly string[] = [
   '等下，我闪个思路', '脑子在蹦迪', '嗯…', '让我想想', '盘一下', '啾', 'lol', 'hm', 'oh',
   'ok', 'um', 'heh', 'uh', 'nah', 'mm', 'wow', 'nice', 'rgrg', 'okk', 'hhh', 'emm', 'emmm',
   'CPU烧了', '让我打个log看看', '先跑一下试试', '定位一下', '排查一下', '看看日志',
-  'loading 99%', '让我捋一下逻辑',
+  '抓个包看看', 'loading 99%', '让我捋一下逻辑', '嗯…让我偷想一下',
 ]
 
 /** Tiered phrases when thinking runs long (elapsed >= threshold). */
@@ -54,7 +54,7 @@ export const THINKING_TIERS: readonly {
 }[] = [
   { atMs: 30_000, pool: ['嗯，让我细想想', '30秒了，还在盘', '等下，快好了', '别急，就快出结果了', '让我再捋一捋', '嗯…思路没断', '30秒，快了', '等等，有眉目了', '有点久…', '转圈圈…', '马上马上', '快了快了', '别走，就快好了', '在盘了呢', '还在定位', '快复现了'] },
   { atMs: 60_000, pool: ['1分钟，还在想', '这题有点东西', '让我再钻研下', '嗯…问题不简单', '1分钟，别走开', '盘得有点深', '脑细胞在燃烧', '等等，快盘清了', '还在努力…', '这个有点绕…', '烧脑中…', '别走，快了', '一分钟了，再等等', '这题值得盘', '还在排查', '这个有点复杂'] },
-  { atMs: 300_000, pool: ['5分钟，大工程', '这把我得认真', '确实有点绕', '等等，我在修仙', '快好了，真的', '盘了一大圈', '别慌，在收尾', '给我一首歌的时间', '还没放弃…', '这题真的硬…', '我给跪了…', '憋大招中', '5分钟了，等值了', '快了，真快了', '这个需求很简单', '能跑就别动'] },
+  { atMs: 300_000, pool: ['5分钟，大工程', '这把我得认真', '确实有点绕', '等等，我在修仙', '快好了，真的', '盘了一大圈', '别慌，在收尾', '给我一首歌的时间', '还没放弃…', '这题真的硬…', '我给跪了…', '憋大招中', '5分钟了，等值了', '快了，真快了', '这个需求很简单', '能跑就别动', 'PM说这个很急', '先上线再说'] },
 ]
 
 /** Phrases shown while waiting for the first streamed token. */
@@ -73,22 +73,27 @@ export const ACTION_MAP: readonly {
   readonly test: RegExp
   readonly actions: readonly string[]
 }[] = [
-  { test: /^(read|read_file|cat)$/i, actions: ['翻翻文档', '让我康康', '读一下', '看一眼', '翻阅中', '读读看', '翻翻', '看看', '瞄一眼', '康康', '翻一页'] },
-  { test: /^(write|write_file|create_file)$/i, actions: ['写写写', '下笔中', '码字呢', '写一段', '记录一下', '写一下', '记下来', '落笔', '开写', '存个文件'] },
-  { test: /^(edit|edit_file|str_replace|apply_patch|search_replace)$/i, actions: ['改改', '修修补补', '润色一下', '编辑中', '调整调整', '改一改', '修一下', '改两行', '调一下', '补一刀'] },
-  { test: /^(bash|shell|run|exec|powershell|cmd)$/i, actions: ['跑个命令', 'bash一下', '敲敲指令', '命令行走起', '执行一下', '敲回车', '跑一下', '敲个命令', '跑命令', '使唤终端'] },
-  { test: /^(grep|rg|search|search_in_files)$/i, actions: ['搜搜东西', 'grep 一下', '找找匹配', '关键词走你', '过滤中', '搜搜看', '搜一下', '找找', '扫一眼', '挖一挖'] },
-  { test: /^(find|glob)$/i, actions: ['找找文件', '找一下', '寻宝中', '找啊找', '文件在哪', '查找中', '搜搜目录'] },
+  { test: /^(read|read_file|cat)$/i, actions: ['翻翻文档', '让我康康', '读一下', '看一眼', '翻阅中', '读读看', '翻翻', '看看', '瞄一眼', '康康', '翻一页', '翻翻看'] },
+  { test: /^(write|write_file|create_file)$/i, actions: ['写写写', '下笔中', '码字呢', '写一段', '记录一下', '改改再写', '写一下', '记下来', '落笔', '开写', '存个文件'] },
+  { test: /^(edit|edit_file|str_replace|apply_patch|search_replace)$/i, actions: ['改改', '修修补补', '润色一下', '编辑中', '调整调整', '改一改', '修一下', '改两行', '调一下', '补一刀', '动动手指'] },
+  { test: /^(bash|shell|run|exec|powershell|cmd)$/i, actions: ['跑个命令', 'bash一下', '敲敲指令', '命令行走起', '执行一下', '敲回车', '跑一下', '敲个命令', '跑命令', '使唤终端', '跑个腿'] },
+  { test: /^(grep|rg|search|search_in_files|ffgrep)$/i, actions: ['搜搜东西', 'grep 一下', '找找匹配', '关键词走你', '过滤中', '搜搜看', '搜搜', '找找', '搜一下', '扫一眼', '挖一挖'] },
+  { test: /^(find|glob|fffind)$/i, actions: ['找找文件', '找一下', '寻宝中', '找啊找', '文件在哪', '查找中', '摸一下', '搜搜目录'] },
   { test: /^(ls|list_dir|list)$/i, actions: ['列个清单', '看看目录', 'ls 看一眼', '瞄一下文件', '目录走起', '列出来', '列一下', '瞟一眼', '翻翻'] },
-  { test: /^(web_search|search_web|brave|tavily|exa)$/i, actions: ['网上搜搜', '搜一下', '网络冲浪', '查找资料', '上网瞄瞄', '上网搜搜', '查查', '搜一圈', '打听一下'] },
-  { test: /^(web_fetch|fetch|fetch_content)$/i, actions: ['抓个页面', '拉取一下', 'fetch 中', '扒拉网页', '取点内容', '抓取资料', '扒一下', '打开看看'] },
-  { test: /^(mcp)/i, actions: ['mcp 连一下', '调个服务', '接个工具', 'mcp 走你', '调接口', '连一下', '喊外援', '接一下'] },
+  { test: /^(web_search|search_web|brave|tavily|exa|search-layer)$/i, actions: ['网上搜搜', '搜一下', '网络冲浪', '查找资料', '上网瞄瞄', '上网搜搜', '查查', '搜一圈', '打听一下'] },
+  { test: /^(web_fetch|fetch|fetch_content|get_search_content|batch_web_fetch)$/i, actions: ['抓个页面', '拉取一下', 'fetch 中', '扒拉网页', '取点内容', '抓取资料', '扒一下', '拉一下', '打开看看'] },
+  { test: /^(mcp)/i, actions: ['mcp 连一下', '调个服务', '接个工具', 'mcp 走你', '调接口', '连一下', '调个工具', '喊外援', '接一下', '问问插件'] },
+  { test: /^(recall)$/i, actions: ['回想一下', '回忆中', '提取记忆', '想起啥了', '记起来', '翻翻记忆', '想想之前'] },
   { test: /^(subagent|agent|task)$/i, actions: ['派个小弟', '小助手出动', '支个 agent', '让小弟跑腿', '代理干活', '子任务起飞', '分个任务', '交给小弟', '派出去'] },
-  { test: /^(todo|manage_todo_list)$/i, actions: ['列个待办', '写个清单', 'todo 安排', '记一下', '待办走起', '清单一下', '记个待办', '打个勾'] },
-  { test: /^(browser|chrome|playwright)/i, actions: ['开个浏览器', '浏览器跑腿', '网页操作', '浏览器干活', '开网页', '点点页面'] },
+  { test: /^(todo|manage_todo_list)$/i, actions: ['列个待办', '写个清单', 'todo 安排', '记一下', '待办走起', '清单一下', '记个待办', '划个清单', '打个勾'] },
+  { test: /^(browser|chrome|playwright|agent_browser|chrome_devtools)/i, actions: ['开个浏览器', '浏览器跑腿', '网页操作', '浏览器干活', '开网页', '开浏览器', '点点页面', '开个页面'] },
   { test: /^(git|gh|github)/i, actions: ['git 操作', '提交一下', '版本控制', 'git 走你', '提交代码', '管个仓库', 'git 一下'] },
-  { test: /^(ask_user_question|ask)$/i, actions: ['提问中', '问一个问题', 'ask 一下', '请教一下', '问问看', '问你个事', '确认一下'] },
-  { test: /^(goal_complete|goal_blocked)$/i, actions: ['定个目标', '设定目标', 'goal 设置', '目标走起', '规划一下', '更新进度'] },
+  { test: /^(notebook|jupyter)/i, actions: ['笔记本记下', '写个笔记', '记个笔记', '本子写写', '记录东西', '跑个 cell'] },
+  { test: /^(ctx_execute|ctx_execute_file|ctx_batch_execute)$/i, actions: ['上下文执行', '跑上下文', 'ctx 执行', '执行一下', '上下文操作', '运行中', '跑段代码', '算一下', '后台跑一下'] },
+  { test: /^(ctx_search|ctx_index|ctx_fetch_and_index)$/i, actions: ['搜上下文', '上下文搜搜', 'ctx 查找', '找找上下文', '搜一下历史', '找找记录', '翻知识库', '查索引', '搜一下笔记'] },
+  { test: /^(ctx_stats|ctx_doctor|ctx_upgrade|ctx_purge|ctx_insight)$/i, actions: ['统计一下', '上下文统计', 'ctx 状态', '看个状态', '统计中', '看看数目', '看看状态', '诊断一下', '查一下'] },
+  { test: /^(ask_user_question|ask)$/i, actions: ['提问中', '问一个问题', 'ask 一下', '请教一下', '问问看', '问一问', '问你个事', '确认一下', '问问你'] },
+  { test: /^(goal_complete|goal_blocked)$/i, actions: ['定个目标', '设定目标', 'goal 设置', '目标走起', '规划一下', '目标确认', '标记目标', '更新进度', '打个勾'] },
   { test: /^(todo_write)$/i, actions: ['记个待办', '划个清单', '打个勾'] },
 ]
 
@@ -102,6 +107,7 @@ export const FAIL_PHRASES: readonly string[] = [
   '我本地能跑啊', '昨天还能跑', '重启试试', '清一下缓存', '删了重装', '你刷新一下', '环境问题',
   '少了个分号', '拼错了', '没保存', '又不是不能用', '绷不住了', '难绷', '卒', '裂开',
   '血压上来了', '缓存害我', '再给我一次机会', '这波大意了', '手滑', '回滚重来', '换个姿势',
+  '重试一次',
 ]
 
 /** Turn-completion phrases. */
@@ -111,6 +117,7 @@ export const DONE_PHRASES: readonly string[] = [
   '搞定收工', '收！', '完事！', '下一题', '能跑！', '没报错', '过了', '上线！', '稳了', '6',
   '完工！', '完美收场', '这波不亏', '一次过', '收工摸鱼', '漂亮', '全绿', '干净利落',
   '手到擒来', '水到渠成', '下班！', '歇口气', '交接完成', '工单关闭', '收尾完毕',
+  '在我机器上能跑',
 ]
 
 /** Night-owl phrases mixed in between 00:00 and 06:00 local time. */
@@ -171,10 +178,15 @@ export const EN_ACTION_MAP: readonly {
   { test: /^(web_search|search_web|brave|tavily|exa)$/i, actions: ['Searching the web', 'Googling', 'Researching', 'Web diving (the safe kind)', 'Looking it up'] },
   { test: /^(web_fetch|fetch|fetch_content)$/i, actions: ['Fetching a page', 'Grabbing content', 'Pulling the page', 'Downloading knowledge'] },
   { test: /^(mcp)/i, actions: ['Calling MCP', 'Hitting a service', 'MCP time', 'Talking to a server'] },
+  { test: /^(recall)$/i, actions: ['Recalling', 'Digging through memory', 'Remembering things', 'Checking the archives'] },
   { test: /^(subagent|agent|task)$/i, actions: ['Delegating', 'Sending a subagent', 'Calling a helper', 'Outsourcing', 'Drafting a minion'] },
   { test: /^(todo|manage_todo_list)$/i, actions: ['Updating todos', 'Checking the list', 'Todo time', 'Adding a checkbox'] },
   { test: /^(browser|chrome|playwright)/i, actions: ['Driving the browser', 'Clicking around', 'Browsing', 'Puppeteering a browser'] },
   { test: /^(git|gh|github)/i, actions: ['Git-ing', 'Committing', 'Version control dance', 'Git things', 'Saving the timeline'] },
+  { test: /^(notebook|jupyter)/i, actions: ['Writing a notebook', 'Running a cell', 'Notebook time', 'Jotting it down'] },
+  { test: /^(ctx_execute|ctx_execute_file|ctx_batch_execute)$/i, actions: ['Running context', 'Executing in context', 'Context ops', 'Running a snippet'] },
+  { test: /^(ctx_search|ctx_index|ctx_fetch_and_index)$/i, actions: ['Searching context', 'Looking through history', 'Indexing notes', 'Digging the knowledge base'] },
+  { test: /^(ctx_stats|ctx_doctor|ctx_upgrade|ctx_purge|ctx_insight)$/i, actions: ['Context stats', 'Checking status', 'Diagnosing', 'Looking at numbers'] },
   { test: /^(ask_user_question|ask)$/i, actions: ['Asking you', 'Checking with you', 'Quick question', 'Pinging the human'] },
   { test: /^(goal_complete|goal_blocked)$/i, actions: ['Updating goals', 'Tracking progress', 'Checking the objective'] },
   { test: /^(todo_write)$/i, actions: ['Writing todos', 'Making a list', 'Adding a checkbox'] },
@@ -210,6 +222,266 @@ export const EN_NIGHT_PHRASES: readonly string[] = [
   'Who needs sleep anyway?', 'The stars are my witness',
 ]
 
+// ── 彩蛋池 (easter eggs, pi extension parity) ────────────────────────────
+
+/** Rare easter-egg phrases (1/150 draw, pi `RARE_PHRASES`). */
+export const RARE_PHRASES: readonly string[] = [
+  'SSR！稀有彩蛋', 'UR 掉落', '金色传说！', '爆装备了', 'ssr 彩蛋出现', 'lol 中奖了', '这把 ez',
+  'GG！闪耀', '稀有掉落确认', 'wow，出橙了', '彩蛋砸脸', '我承认，被帅到了', '天选时刻',
+  '五星好评掉落', '你发现了隐藏款', '触发隐藏对话', '稀有帧', '恭喜，这是稀有货', 'lol 你赚了',
+  'gg ez 彩蛋', '欧气爆棚', '这把不亏', '真·金色传说', '彩蛋蹦出来了', 'sssr 隐藏', '你解锁了稀有',
+  'SSR！', 'UR！', '金色传说', 'gg', 'ez', '暴击了', 'wink ~', '你发现我了', '欧皇降临',
+  '隐藏款！', '稀有度 MAX', '一次过！', '没bug', '完美运行', '测试全绿', '这波在大气层',
+]
+
+/** English rare easter-egg phrases. */
+export const EN_RARE_PHRASES: readonly string[] = [
+  'SSR! Rare egg', 'Legendary drop!', 'Golden loot', 'You found the hidden one',
+  'Secret phrase unlocked', 'Rarity MAX', 'Wink ~', 'You caught me', 'GG, shiny!',
+  'This is the easter egg', 'Five-star drop', 'Ez win', 'Gacha gods smiled on you',
+]
+
+/** Chance of drawing a rare phrase per thinking rotation. */
+export const RARE_CHANCE = 1 / 150
+
+/** Weekend-greeting phrases (once per turn on Sat/Sun). */
+export const WEEKEND_PHRASES: readonly string[] = [
+  '周末摸鱼中', '周末也在！', '放假也陪你', '周末不关机', '周末偷着盘', '周末也在卷？', '卷王你好',
+  '还在加班…', '周末限定皮肤', '周六也营业', '周日也接单', '周末不放假', '摸鱼限定版', '周末模式 ON',
+  '周末hotfix', '周末在修bug', '周末上线',
+]
+
+/** English weekend greetings. */
+export const EN_WEEKEND_PHRASES: readonly string[] = [
+  'Weekend mode ON', 'Working on a weekend?', 'Saturday shift', 'Sunday grind',
+  'The weekend never sleeps', 'Casual Saturday', 'Weekend warrior', 'Still here, it\'s the weekend',
+]
+
+/** Whether `date` falls on a weekend. */
+export function isWeekend(date: Date): boolean {
+  const day = date.getDay()
+  return day === 0 || day === 6
+}
+
+/** Holiday copy keyed by `MM-DD` (zh). */
+export const HOLIDAY_PHRASES: Readonly<Record<string, readonly string[]>> = {
+  '01-01': ['新年快乐！', '元旦快乐', '新的一年，新的 bug', '新年第一盘', '开工大吉', '新年第一行代码'],
+  '02-14': ['情人节也在敲代码', '代码才是真爱', '今天不约会？', 'bug 也是 love', '键盘就是玫瑰'],
+  '04-01': ['愚人节快乐', '这个 bug 是假的吧', '小心假报错', '今天谁骗我', '❌ 骗你的，没报错'],
+  '05-01': ['劳动节还在卷', '劳动最光荣', '打工人打工魂', '卷王放假了？'],
+  '06-01': ['儿童节快乐', '谁还不是个宝宝', '今天代码要写得可爱', '🍭 宝宝模式'],
+  '10-31': ['万圣节快乐', '不给糖就捣蛋', '🎃 南瓜来了', '👻 代码也会吓人'],
+  '12-24': ['平安夜快乐', '圣诞老人来了', '🎄 今晚写代码有礼物', '平安夜也在盘'],
+  '12-25': ['圣诞快乐', 'Merry Christmas', '🎅 圣诞也陪你', '圣诞限定彩蛋', '🎄 麋鹿送代码'],
+  '12-31': ['跨年夜', '新年倒计时', '今年最后一盘', '🍾 准备跨年', '明年见！'],
+}
+
+/** English holiday copy keyed by `MM-DD`. */
+export const EN_HOLIDAY_PHRASES: Readonly<Record<string, readonly string[]>> = {
+  '01-01': ['Happy New Year!', 'New year, new bugs', 'First grind of the year'],
+  '02-14': ['Valentine\'s at the keyboard', 'Code is my true love', 'No date tonight?'],
+  '04-01': ['April Fools!', 'That bug is fake, right?', 'Careful of fake errors'],
+  '05-01': ['Labor Day grind', 'Workers of the world', 'Still shipping on a holiday'],
+  '06-01': ['Happy Children\'s Day', 'We\'re all babies inside', 'Write cute code today'],
+  '10-31': ['Happy Halloween', 'Trick or treat', '🎃 Pumpkins and code'],
+  '12-24': ['Merry Christmas Eve', 'Santa\'s coming', '🎄 Gifts for coders too'],
+  '12-25': ['Merry Christmas', '🎅 Santa grinds too', 'Christmas egg unlocked', '🎄 Code under the tree'],
+  '12-31': ['New Year\'s Eve', 'Countdown time', 'Last grind of the year', '🍾 See you next year!'],
+}
+
+/** Lunar New Year copy (approximated by Gregorian dates, extended yearly). */
+export const LUNAR_NEW_YEAR_PHRASES: readonly string[] = [
+  '🧧 春节快乐！', '过年还在写代码', '红包拿来', '新春快乐', '拜年了', '过年好', '代码也拜个年',
+  '🐉 龙年大吉', '年夜饭写代码', '年味盘起来',
+]
+
+/** English Lunar New Year copy. */
+export const EN_LUNAR_NEW_YEAR_PHRASES: readonly string[] = [
+  '🧧 Happy Lunar New Year!', 'Coding through the New Year', 'Red packets please',
+  'Gong Xi Fa Cai', 'New Year grind',
+]
+
+/** Gregorian dates marked as Lunar New Year (2025–2027, extend yearly). */
+export const LUNAR_NEW_YEAR_DAYS: Readonly<Record<string, true>> = {
+  '2025-01-29': true, '2025-01-30': true, '2025-01-31': true, '2025-02-01': true, '2025-02-02': true, '2025-02-03': true, '2025-02-04': true,
+  '2026-02-17': true, '2026-02-18': true, '2026-02-19': true, '2026-02-20': true, '2026-02-21': true, '2026-02-22': true, '2026-02-23': true,
+  '2027-02-06': true, '2027-02-07': true, '2027-02-08': true, '2027-02-09': true, '2027-02-10': true, '2027-02-11': true, '2027-02-12': true,
+}
+
+/** Phrases shown after the user interrupts and the model resumes. */
+export const CONTINUE_PHRASES: readonly string[] = [
+  '再来，again！', '接着盘', '继续整', 'again！走起', '接着刚才的', '续上，继续', '再续一秒',
+  '继续继续', '继续…', '好，接着来…', 'again', '没断片', '在修了在修了', '马上好', '还差一点', '快好了',
+]
+
+/** English post-interruption phrases. */
+export const EN_CONTINUE_PHRASES: readonly string[] = [
+  'Again! Round two', 'Back at it', 'Continuing where we left off', 'Resuming…', 'One more time',
+  'No memory loss here', 'Fixing it, fixing it', 'Almost there', 'Round two: electric boogaloo',
+]
+
+/** Phrases after a successful context compaction. */
+export const COMPACT_PHRASES: readonly string[] = [
+  '压缩了一下', '瘦了个身', '腾出地方了', '整理了下记忆', '减负成功', '释放了一波', '清爽多了',
+  '瘦身完毕', '好多了', '整理好了', '清了一下缓存', '重启了一下', 'GC了一下', '释放了一波内存',
+]
+
+/** English post-compaction phrases. */
+export const EN_COMPACT_PHRASES: readonly string[] = [
+  'Compacted', 'Slimmed down', 'Made room', 'Memory tidied', 'Lighter now', 'All tidy',
+  'Cleared the cache', 'GC\'d', 'Fresh and clean',
+]
+
+/** Urgent phrases when compaction is forced by overflow. */
+export const OVERFLOW_PHRASES: readonly string[] = [
+  '装不下了', '太长了', '超载了', '爆了', '兜不住了',
+]
+
+/** English overflow phrases. */
+export const EN_OVERFLOW_PHRASES: readonly string[] = [
+  "It's full", 'Too long', 'Overloaded', 'Overflow!', "Can't hold it all",
+]
+
+/** Phrases when retrying after a forced compaction. */
+export const COMPACT_RETRY_PHRASES: readonly string[] = [
+  '马上重试', '继续盘', '接着来', '再来', '续上',
+]
+
+/** English compact-retry phrases. */
+export const EN_COMPACT_RETRY_PHRASES: readonly string[] = [
+  'Retrying now', 'Carrying on', 'Round three', 'Again', 'Picking it back up',
+]
+
+/** Model-switch quips keyed by a lowercase substring of the model id. */
+export const MODEL_QUIPS: Readonly<Record<string, readonly string[]>> = {
+  claude: ['Claude 来了', '换 Claude 了', '让 Claude 试试', 'Claude 出战', '克劳德上线'],
+  gpt: ['GPT 来了', '换个 GPT', 'GPT 出战', 'GPT 值班', 'GPT 上班'],
+  grok: ['Grok 来了', 'Grok 出战', 'Grok 硬核', 'Grok 上班', '火星选手'],
+  gemini: ['Gemini 来了', 'Gemini 出战', 'Google 选手', '双子星', 'G 家选手'],
+  deepseek: ['DeepSeek 来了', 'DeepSeek 出战', '国产选手', '深度求索', 'DS 上班'],
+  haiku: ['Haiku 快枪手', 'Haiku 来了', '短平快模式', '俳句选手', 'Haiku 轻快'],
+  sonnet: ['Sonnet 来了', 'Sonnet 出战', '文采担当', '十四行诗', 'Sonnet 文豪'],
+  opus: ['Opus 来了', 'Opus 出战', '放大招', '巨作登场', 'Opus 主力'],
+  flash: ['Flash 来了', '闪电模式', '快快快', '快就完事了', '光速模式'],
+  pro: ['Pro 来了', 'Pro 出战', '专业模式', '满血版', 'Pro 拉满'],
+  mini: ['Mini 来了', 'Mini 轻装上阵', '小模型也够用', '迷你选手', 'Mini 省流'],
+}
+
+/** English model-switch quips. */
+export const EN_MODEL_QUIPS: Readonly<Record<string, readonly string[]>> = {
+  claude: ['Claude is in', 'Switching to Claude', 'Claude takes the wheel', 'Claude reporting'],
+  gpt: ['GPT is in', 'Switching to GPT', 'GPT on duty', 'GPT reporting'],
+  grok: ['Grok is in', 'Grok takes over', 'Mars pilot on deck', 'Grok reporting'],
+  gemini: ['Gemini is in', 'Google\'s finest', 'Gemini takes the wheel', 'Gemini reporting'],
+  deepseek: ['DeepSeek is in', 'Homegrown champ', 'DeepSeek reporting', 'DS on duty'],
+  haiku: ['Haiku in the fast lane', 'Haiku reporting', 'Short and snappy mode'],
+  sonnet: ['Sonnet is in', 'The wordsmith', 'Sonnet reporting', 'Fourteen lines of glory'],
+  opus: ['Opus is in', 'The big guns', 'Opus reporting', 'Full power mode'],
+  flash: ['Flash is in', 'Lightning mode', 'Zoom zoom', 'Flash reporting'],
+  pro: ['Pro is in', 'Pro mode', 'Maxed out', 'Pro reporting'],
+  mini: ['Mini is in', 'Small but mighty', 'Lite mode', 'Mini reporting'],
+}
+
+/** Detect a holiday for `date`, Lunar New Year first. */
+export function holidayPhrase(date: Date): string | null {
+  const mmdd = `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  const ymd = `${date.getFullYear()}-${mmdd}`
+  const en = langNow() === 'en'
+  if (LUNAR_NEW_YEAR_DAYS[ymd] === true) {
+    return pickPhrase(en ? EN_LUNAR_NEW_YEAR_PHRASES : LUNAR_NEW_YEAR_PHRASES)
+  }
+  const pool = en ? EN_HOLIDAY_PHRASES[mmdd] : HOLIDAY_PHRASES[mmdd]
+  if (pool !== undefined) return pickPhrase(pool)
+  return null
+}
+
+/** Pick a rare easter-egg phrase in the active language. */
+export function rarePhrase(previous?: string): string {
+  return pickPhrase(langNow() === 'en' ? EN_RARE_PHRASES : RARE_PHRASES, previous)
+}
+
+/** Pick a weekend greeting in the active language. */
+export function weekendPhrase(previous?: string): string {
+  return pickPhrase(langNow() === 'en' ? EN_WEEKEND_PHRASES : WEEKEND_PHRASES, previous)
+}
+
+/** Pick a post-interruption phrase in the active language. */
+export function continuePhrase(): string {
+  return pickPhrase(langNow() === 'en' ? EN_CONTINUE_PHRASES : CONTINUE_PHRASES)
+}
+
+/** Pick a post-compaction phrase in the active language. */
+export function compactPhrase(): string {
+  return pickPhrase(langNow() === 'en' ? EN_COMPACT_PHRASES : COMPACT_PHRASES)
+}
+
+/** Pick an overflow phrase in the active language. */
+export function overflowPhrase(): string {
+  return pickPhrase(langNow() === 'en' ? EN_OVERFLOW_PHRASES : OVERFLOW_PHRASES)
+}
+
+/** Pick a compact-retry phrase in the active language. */
+export function compactRetryPhrase(): string {
+  return pickPhrase(langNow() === 'en' ? EN_COMPACT_RETRY_PHRASES : COMPACT_RETRY_PHRASES)
+}
+
+/**
+ * Quip for a model id (substring match), or null when no pool matches.
+ * @param modelId - Model id, e.g. `deepseek-chat` or `gpt-4o`.
+ */
+export function modelQuip(modelId: string): string | null {
+  const lower = modelId.toLowerCase()
+  const quips = langNow() === 'en' ? EN_MODEL_QUIPS : MODEL_QUIPS
+  for (const [key, pool] of Object.entries(quips)) {
+    if (lower.includes(key)) return pickPhrase(pool)
+  }
+  return null
+}
+
+/** Feature toggles for the lively phrase selector. */
+export interface LivelyFeatures {
+  /** Allow rare 1/150 easter eggs. */
+  readonly rareEggs?: boolean
+  /** Allow weekend greetings on Sat/Sun. */
+  readonly weekend?: boolean
+  /** Allow date-matched holiday / Lunar New Year copy. */
+  readonly holidays?: boolean
+  /** Mix night-owl copy between 00:00 and 06:00. */
+  readonly nightPhrases?: boolean
+}
+
+/**
+ * Pick a thinking phrase with the pi extension's egg order: holiday first,
+ * then rare (1/150), then weekend, then the elapsed-time tiers with night
+ * mixing. Every egg is gated by `features` (defaults all on).
+ * @param elapsedMs - Milliseconds spent thinking in the current phase.
+ * @param previous - Previously shown phrase, to avoid repeats.
+ * @param night - Whether the night window is active (mixes night copy).
+ * @param now - Current wall-clock time (injectable for tests).
+ * @param features - Feature toggles; absent flags default to on.
+ * @param extra - User custom phrases appended to the base thinking pool.
+ */
+export function livelyThinkingPhrase(
+  elapsedMs: number,
+  previous?: string,
+  night = false,
+  now: Date = new Date(),
+  features: LivelyFeatures = {},
+  extra?: readonly string[],
+): string {
+  if (features.holidays !== false) {
+    const holiday = holidayPhrase(now)
+    if (holiday !== null) return holiday
+  }
+  if (features.rareEggs !== false && Math.random() < RARE_CHANCE) {
+    return rarePhrase(previous)
+  }
+  if (features.weekend !== false && isWeekend(now)) {
+    return weekendPhrase(previous)
+  }
+  return thinkingPhrase(elapsedMs, previous, features.nightPhrases !== false && night, extra)
+}
+
 /** Common git tool names / bash commands containing `git `. */
 export const GIT_TOOL_RE = /^(?:git|git_diff|git_commit|git_push|git_pull|git_checkout|git_branch|git_merge|git_rebase|github|gh)$/i
 
@@ -234,14 +506,20 @@ export function waitingPool(): readonly string[] {
  * @param elapsedMs - Milliseconds spent thinking in the current phase.
  * @param previous - Previously shown phrase, to avoid repeats.
  * @param night - Mix night-owl copy into the pool.
+ * @param extra - User custom phrases appended to the base (non-tier) pool.
  */
-export function thinkingPhrase(elapsedMs: number, previous?: string, night = false): string {
+export function thinkingPhrase(elapsedMs: number, previous?: string, night = false, extra?: readonly string[]): string {
   let pool: readonly string[] = langNow() === 'en' ? EN_THINKING_PHRASES : THINKING_PHRASES
   for (const tier of thinkingPools()) {
     if (elapsedMs >= tier.atMs) {
       pool = tier.pool
       break
     }
+  }
+  // Custom phrases ride every candidate pool (base and tiers alike), so user
+  // copy keeps showing up on long thinking too.
+  if (extra !== undefined && extra.length > 0) {
+    pool = [...pool, ...extra]
   }
   if (night && pool === (langNow() === 'en' ? EN_THINKING_PHRASES : THINKING_PHRASES)) {
     const nightPool = langNow() === 'en' ? EN_NIGHT_PHRASES : NIGHT_PHRASES
