@@ -37,7 +37,10 @@ function parsePnpmImporters(text) {
   let inImporter = false
   let field = null
   let name = null
-  for (const line of text.split('\n')) {
+  // Tolerate CRLF checkouts (Windows autocrlf): the $-anchored patterns
+  // below must not be defeated by a trailing \r.
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.replace(/\r$/, '')
     if (/^  \.:/.test(line)) { inImporter = true; continue }
     if (inImporter && (/^\S/.test(line) || /^  \S/.test(line))) break // next top-level key or importer
     if (!inImporter) continue
