@@ -432,7 +432,7 @@ export class ActivityTracker {
         const git = tool.isGit
           ? (this.gitBranch !== undefined ? ` · git ${this.gitBranch}` : ' · git')
           : ''
-        const combo = this.streak >= COMBO_SHOW_AT ? ` · 🔥x${this.streak}` : ''
+        const combo = this.streak >= COMBO_SHOW_AT ? ` · ${t('tool-streak', { count: this.streak })}` : ''
         const narration = this.freshNarration(nowMs)
         const line = narration === null
           ? `${fragment} · ${elapsed}${git}${combo}`
@@ -507,12 +507,12 @@ export class ActivityTracker {
       const phrase = this.previousPhrase ?? (this.phase === 'waiting'
         ? waitingPhrase()
         : this.livelyPhrase(thinkingMs, nowMs))
-      // Ellipsis breathing (pi DOT_FRAMES) + optional estimated tps prefix.
-      const dots = DOT_FRAMES[Math.floor(nowMs / TICK_MS) % DOT_FRAMES.length]
+      // The indicator animation (whale etc.) already signals activity, so the
+      // pi DOT_FRAMES ellipsis breathing is dropped for the DSH line.
       const tps = this.tpsPrefix(nowMs)
       return {
         phase: this.phase,
-        line: `${tps}${phrase}${dots} · ${elapsedLine}`,
+        line: `${tps}${phrase} · ${elapsedLine}`,
         phrase,
         toolCount: this.toolCount,
         turnElapsedMs: this.turnElapsedMs(nowMs),
@@ -598,7 +598,7 @@ export class ActivityTracker {
     const { thinkingMs, toolMs, toolCount } = this.stats()
     const tokens = this.turnTokens > 0 ? ` · 🔥 ${fmtTokens(this.turnTokens)}` : ''
     const sub = this.subagentCount > 0 ? ` · ${t('subagent-count', { count: this.subagentCount })}` : ''
-    const combo = this.maxStreak >= COMBO_SHOW_AT ? ` · 🔥x${this.maxStreak}` : ''
+    const combo = this.maxStreak >= COMBO_SHOW_AT ? ` · ${t('tool-streak', { count: this.maxStreak })}` : ''
     const tools = t(toolCount === 1 ? 'tool-count-one' : 'tool-count-many', { count: toolCount })
     const summary = t('done-summary', {
       tools,
@@ -653,10 +653,6 @@ const COMBO_GAP_MS = 10_000
 const COMBO_SHOW_AT = 2
 /** The tps estimate stays fresh this long after the last chunk. */
 const TPS_WINDOW_MS = 3500
-/** Render tick cadence (matches the TUI's 500ms activity timer). */
-const TICK_MS = 500
-/** Ellipsis breathing frames appended to thinking lines (pi parity). */
-const DOT_FRAMES = ['', ' ·', ' ··', ' ···', ' ··', ' ·']
 /** Cap on replayed done cards; older entries drop. */
 const DONE_QUEUE_MAX = 6
 /** Show the last tool's fragment in the done line for this long after it ends. */

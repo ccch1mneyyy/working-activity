@@ -57,6 +57,8 @@ const dict = {
   },
   'tool-count-one': { zh: '{{count}} 工具', en: '{{count}} tool' },
   'tool-count-many': { zh: '{{count}} 工具', en: '{{count}} tools' },
+  /** Consecutive-tool streak badge (replaces the old flame emoji). */
+  'tool-streak': { zh: '工具x{{count}}', en: 'tool x{{count}}' },
   /** Subagent count in the done summary. */
   'subagent-count': { zh: '子代理 {{count}} 个', en: '{{count}} subagents' },
   /** Work-reminder copy after `workRemindAt` turn-hours. */

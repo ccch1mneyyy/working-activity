@@ -419,7 +419,7 @@ describe('ActivityTracker one-off quips and live extras', () => {
     tracker.onSessionEvent(toolResult(clock.now(), 'c1'))
     clock.advance(1000)
     tracker.onSessionEvent(toolCall(clock.now(), 'c2', 'grep', '{}'))
-    expect(tracker.render().line).toContain('🔥x2')
+    expect(tracker.render().line).toContain('工具x2')
   })
 
   it('counts subagents in the done summary', () => {
@@ -456,14 +456,16 @@ describe('ActivityTracker one-off quips and live extras', () => {
     expect(tracker.render().phrase).not.toMatch(/小时|hour/)
   })
 
-  it('breathes an ellipsis on the thinking line', () => {
+  it('keeps the thinking line stable (no ellipsis breathing)', () => {
+    // The indicator animation already signals activity, so the pi DOT_FRAMES
+    // breathing was removed — the line must not change between ticks.
     const clock = mondayClock()
     const tracker = new ActivityTracker(EGG_FREE_CONFIG, clock.now)
     startThinking(tracker, clock)
     const first = tracker.render().line
     clock.advance(500)
     const second = tracker.render().line
-    expect(first).not.toBe(second)
-    expect(second).toMatch(/ ·{1,3} · 总| ·{1,3}$/)
+    expect(first).toBe(second)
+    expect(second).not.toMatch(/ ·{1,3} · 总| ·{1,3}$/)
   })
 })
