@@ -716,8 +716,10 @@ export function extractNarration(buffer: string): string | null {
 
   // A missing newline must not turn the rest of the response into status text.
   // Stop at sentence ends and clause delimiters, while leaving dotted
-  // identifiers such as `ink.tsx` and `agent.ctx` intact.
-  const boundary = latest.search(/[。．!?！？;；]|\.(?=\s*[A-Z]|$)/)
+  // identifiers such as `ink.tsx`, `agent.ctx` and `README.MD` intact. A dot
+  // ends a sentence only before whitespace, the end, or a Title-case word
+  // (`safely.The`); dot-uppercase-uppercase stays an extension (`.MD`).
+  const boundary = latest.search(/[。．!?！？;；]|\.(?=\s|$|[A-Z][a-z])/)
   const sentence = boundary < 0 ? latest : latest.slice(0, boundary + 1)
 
   // The budget is display width, so English and Chinese render equally long:

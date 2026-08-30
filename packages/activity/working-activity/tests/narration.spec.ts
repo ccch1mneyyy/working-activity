@@ -74,6 +74,14 @@ describe('extractNarration', () => {
     expect(extractNarration('⏵ Checking ink.tsx and agent.ctx before retrying')).toBe(
       'Checking ink.tsx and agent.ctx before retrying',
     )
+    // Uppercase extensions are identifiers, not sentence ends.
+    expect(extractNarration('⏵ Checking README.MD before retrying')).toBe(
+      'Checking README.MD before retrying',
+    )
+    // A Title-case word after the dot still ends the sentence.
+    expect(extractNarration('⏵ Checking README.MD now.The stub only has `on`')).toBe(
+      'Checking README.MD now',
+    )
     // English cuts at a word boundary (~12 words fit in 80 columns), never
     // mid-word like the old fixed 40-character capture.
     expect(extractNarration(`⏵ ${Array.from({ length: 21 }, (_, i) => `word${i + 1}`).join(' ')}`)).toBe(
