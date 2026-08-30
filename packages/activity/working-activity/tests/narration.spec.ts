@@ -52,6 +52,30 @@ describe('extractNarration', () => {
     expect(extractNarration('⏵ 第一个\n⏵ 第二个')).toBe('第二个')
   })
 
+  it('keeps a long English narration intact through the newline', () => {
+    expect(extractNarration(
+      '⏵ Updating the plan-exit test to wait for the final assistant response\nContinuing normally.',
+    )).toBe('Updating the plan-exit test to wait for the final assistant response')
+  })
+
+  it('stops missing-newline continuation at a sentence boundary', () => {
+    expect(extractNarration(
+      '⏵ Help-scroll verify crashed on the fork subagent hook; checking whether we can degrade safely.The stub agent.ctx only has `on`, not more reasoning',
+    )).toBe('Help-scroll verify crashed on the fork subagent hook; checking whether we can degrade safely')
+  })
+
+  it('preserves dotted identifiers and applies semantic limits', () => {
+    expect(extractNarration('⏵ Checking ink.tsx and agent.ctx before retrying')).toBe(
+      'Checking ink.tsx and agent.ctx before retrying',
+    )
+    expect(extractNarration(`⏵ ${Array.from({ length: 21 }, (_, i) => `word${i + 1}`).join(' ')}`)).toBe(
+      Array.from({ length: 20 }, (_, i) => `word${i + 1}`).join(' '),
+    )
+    expect(extractNarration('⏵ 一二三四五六七八九十一二三四五六七八九十一继续')).toBe(
+      '一二三四五六七八九十一二三四五六七八九十',
+    )
+  })
+
   it('returns null without a ⏵ marker', () => {
     expect(extractNarration('没有标记的思考')).toBeNull()
     expect(extractNarration('')).toBeNull()

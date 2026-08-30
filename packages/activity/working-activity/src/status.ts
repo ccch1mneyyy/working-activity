@@ -664,11 +664,26 @@ const NARRATE_GRACE_MS = 5000
 
 /** Extract the latest `⏵` self-narration line from a stream buffer. */
 export function extractNarration(buffer: string): string | null {
-  const matches = [...buffer.matchAll(/⏵\s*([^\n⏵]{1,40})/g)]
-  if (matches.length === 0) return null
-  const latest = matches[matches.length - 1]?.[1]
-  if (latest === undefined) return null
-  const text = latest.replace(/[。．.!！,，、;；]+$/, '').trim()
+  const matches = [...buffer.matchAll(/⏵[ \t]*([^\n⏵]*)/g)]
+  const latest = matches[matches.length - 1]?.[1]?.trim()
+  if (!latest) return null
+
+  // A missing newline must not turn the rest of the response into status text.
+  // Treat a dot before the next uppercase sentence (or at the end) as a
+  // boundary, while leaving dotted identifiers such as `ink.tsx` and
+  // `agent.ctx` intact.
+  const boundary = latest.search(/[。!?！？]|\.(?=\s*[A-Z]|$)/)
+  const sentence = boundary < 0 ? latest : latest.slice(0, boundary + 1)
+
+  // The narration contract is semantic: 20 words for English, 20 characters
+  // for CJK. Apply whichever limit is reached first in mixed-language text.
+  let end = sentence.length
+  const words = [...sentence.matchAll(/\S+/g)]
+  if (words.length > 20) end = Math.min(end, words[19]!.index + words[19]![0].length)
+  const cjk = [...sentence.matchAll(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g)]
+  if (cjk.length > 20) end = Math.min(end, cjk[19]!.index + cjk[19]![0].length)
+
+  const text = sentence.slice(0, end).replace(/[。．.!！,，、;；]+$/, '').trim()
   return text.length === 0 ? null : text
 }
 
