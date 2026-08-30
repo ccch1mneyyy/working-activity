@@ -662,13 +662,69 @@ const STREAM_BUFFER_CHARS = 300
 /** A narration stays visible this long after the stream went quiet. */
 const NARRATE_GRACE_MS = 5000
 
+/** Narration budget in display columns: 40 CJK chars ≈ 12 English words. */
+const NARRATION_MAX_COLUMNS = 80
+
+/** A CJK/full-width code point renders 2 terminal columns; the rest render 1. */
+function isWide(cp: number): boolean {
+  return (
+    (cp >= 0x1100 && cp <= 0x115f) || // Hangul Jamo
+    (cp >= 0x2e80 && cp <= 0xa4cf) || // CJK radicals, kana, Yi
+    (cp >= 0xac00 && cp <= 0xd7a3) || // Hangul syllables
+    (cp >= 0xf900 && cp <= 0xfaff) || // CJK compatibility ideographs
+    (cp >= 0xfe30 && cp <= 0xfe4f) || // CJK compatibility forms
+    (cp >= 0xff00 && cp <= 0xff60) || // full-width forms
+    (cp >= 0xffe0 && cp <= 0xffe6) || // full-width signs
+    (cp >= 0x20000 && cp <= 0x3fffd) // CJK extensions
+  )
+}
+
+/** Cut before `max` columns, backing off to the last word or clause boundary. */
+function cutToWidth(text: string, max: number): string {
+  let width = 0
+  let cut = text.length
+  const chars = [...text]
+  for (let i = 0; i < chars.length; i++) {
+    const w = isWide(chars[i]!.codePointAt(0)!) ? 2 : 1
+    if (width + w > max) {
+      cut = chars.slice(0, i).join('').length
+      break
+    }
+    width += w
+  }
+  if (cut === text.length) return text
+  // Back off to a soft boundary so English words survive intact; dense CJK has
+  // none and hard-cuts at the budget like the original fixed 40-char capture.
+  const head = text.slice(0, cut)
+  const soft = Math.max(
+    head.lastIndexOf(' '),
+    head.lastIndexOf('\t'),
+    head.lastIndexOf('，'),
+    head.lastIndexOf('、'),
+    head.lastIndexOf(';'),
+    head.lastIndexOf('；'),
+    head.lastIndexOf(','),
+  )
+  return soft > 0 ? head.slice(0, soft) : head
+}
+
 /** Extract the latest `⏵` self-narration line from a stream buffer. */
 export function extractNarration(buffer: string): string | null {
-  const matches = [...buffer.matchAll(/⏵\s*([^\n⏵]{1,40})/g)]
-  if (matches.length === 0) return null
-  const latest = matches[matches.length - 1]?.[1]
-  if (latest === undefined) return null
-  const text = latest.replace(/[。．.!！,，、;；]+$/, '').trim()
+  const matches = [...buffer.matchAll(/⏵[ \t]*([^\n⏵]*)/g)]
+  const latest = matches[matches.length - 1]?.[1]?.trim()
+  if (!latest) return null
+
+  // A missing newline must not turn the rest of the response into status text.
+  // Stop at sentence ends and clause delimiters, while leaving dotted
+  // identifiers such as `ink.tsx`, `agent.ctx` and `README.MD` intact. A dot
+  // ends a sentence only before whitespace, the end, or a Title-case word
+  // (`safely.The`); dot-uppercase-uppercase stays an extension (`.MD`).
+  const boundary = latest.search(/[。．!?！？;；]|\.(?=\s|$|[A-Z][a-z])/)
+  const sentence = boundary < 0 ? latest : latest.slice(0, boundary + 1)
+
+  // The budget is display width, so English and Chinese render equally long:
+  // 40 CJK characters and ~12 English words share the same line budget.
+  const text = cutToWidth(sentence, NARRATION_MAX_COLUMNS).replace(/[。．.!！,，、;；]+$/, '').trim()
   return text.length === 0 ? null : text
 }
 

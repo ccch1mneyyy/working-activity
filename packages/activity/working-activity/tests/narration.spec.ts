@@ -52,6 +52,59 @@ describe('extractNarration', () => {
     expect(extractNarration('⏵ 第一个\n⏵ 第二个')).toBe('第二个')
   })
 
+  it('keeps a long English narration intact through the newline', () => {
+    expect(extractNarration(
+      '⏵ Updating the plan-exit test to wait for the final assistant response\nContinuing normally.',
+    )).toBe('Updating the plan-exit test to wait for the final assistant response')
+  })
+
+  it('stops missing-newline continuation at a clause boundary', () => {
+    expect(extractNarration(
+      '⏵ Help-scroll verify crashed on the fork subagent hook; checking whether we can degrade safely.The stub agent.ctx only has `on`, not more reasoning',
+    )).toBe('Help-scroll verify crashed on the fork subagent hook')
+  })
+
+  it('treats full-width period and semicolons as boundaries', () => {
+    expect(extractNarration('⏵ 修复登录．继续检查')).toBe('修复登录')
+    expect(extractNarration('⏵ 修复登录；继续检查')).toBe('修复登录')
+    expect(extractNarration('⏵ First task; Next task')).toBe('First task')
+  })
+
+  it('preserves dotted identifiers and caps by display width', () => {
+    expect(extractNarration('⏵ Checking ink.tsx and agent.ctx before retrying')).toBe(
+      'Checking ink.tsx and agent.ctx before retrying',
+    )
+    // Uppercase extensions are identifiers, not sentence ends.
+    expect(extractNarration('⏵ Checking README.MD before retrying')).toBe(
+      'Checking README.MD before retrying',
+    )
+    // A Title-case word after the dot still ends the sentence.
+    expect(extractNarration('⏵ Checking README.MD now.The stub only has `on`')).toBe(
+      'Checking README.MD now',
+    )
+    // English cuts at a word boundary (~12 words fit in 80 columns), never
+    // mid-word like the old fixed 40-character capture.
+    expect(extractNarration(`⏵ ${Array.from({ length: 21 }, (_, i) => `word${i + 1}`).join(' ')}`)).toBe(
+      Array.from({ length: 12 }, (_, i) => `word${i + 1}`).join(' '),
+    )
+    expect(extractNarration(
+      '⏵ Refactoring the narration extraction pipeline so long status lines stop splitting words in half',
+    )).toBe('Refactoring the narration extraction pipeline so long status lines stop')
+    // Chinese keeps the original 40-character budget, hard-cut like main.
+    expect(extractNarration(`⏵ ${'一二三四五六七八九十'.repeat(4)}继续`)).toBe(
+      '一二三四五六七八九十'.repeat(4),
+    )
+  })
+
+  it('applies the same width budget to mixed-language lines', () => {
+    expect(extractNarration(
+      '⏵ 修复登录页 checking build pipeline for the release branch and rerunning tests 更新快照',
+    )).toBe('修复登录页 checking build pipeline for the release branch and rerunning tests')
+    expect(extractNarration(
+      '⏵ 正在修复登录页面的表单校验逻辑，同时调整侧边栏的样式和布局，然后重新运行所有测试并更新快照确保完全一致',
+    )).toBe('正在修复登录页面的表单校验逻辑，同时调整侧边栏的样式和布局')
+  })
+
   it('returns null without a ⏵ marker', () => {
     expect(extractNarration('没有标记的思考')).toBeNull()
     expect(extractNarration('')).toBeNull()
