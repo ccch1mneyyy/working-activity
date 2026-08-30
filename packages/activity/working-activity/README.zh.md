@@ -27,6 +27,10 @@ plugins:
     name: '@deepseek-ai/dsh-working-activity'
 ```
 
+Host 与 TUI 集成支持 DSH `0.1.0-rc.6`、`0.1.1-rc` 版本线和
+`0.1.2-alpha.2`。可选 Web 客户端仍使用 rc 版 client-runtime 契约，不在
+alpha.2 兼容范围内。
+
 ## TUI 用法
 
 与 `dsh-tui` 一起启用插件，并把槽位加进左侧 prompt 模板：

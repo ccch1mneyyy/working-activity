@@ -38,6 +38,10 @@ inserting a second same-id row:
     publishIntervalMs: 500
 ```
 
+Host and TUI integration supports the DSH `0.1.0-rc.6` and `0.1.1-rc` lines,
+plus `0.1.2-alpha.2`. The optional Web client still uses the rc client-runtime
+contract and is not covered by alpha.2 compatibility.
+
 ## TUI usage
 
 Install the plugin into a profile that composes the official `dsh-tui`, then

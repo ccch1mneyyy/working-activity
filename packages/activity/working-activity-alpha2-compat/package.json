@@ -1,0 +1,33 @@
+{
+  "name": "dsh-working-activity-alpha2-compat",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "test": "pnpm run build && vitest run integration.spec.ts"
+  },
+  "dependencies": {
+    "dsh-working-activity": "file:../working-activity"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-agent-loop": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-agent-loop-testkit": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-invariants": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-llm": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-session": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-session-projection": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-tools": "0.1.2-alpha.2",
+    "@deepseek-ai/schemastery": "3.18.2",
+    "@types/node": "^22.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.4"
+  },
+  "dependenciesMeta": {
+    "dsh-working-activity": {
+      "injected": true
+    }
+  }
+}

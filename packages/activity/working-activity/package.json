@@ -50,6 +50,7 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
     "build:client": "tsdown -c tsdown.config.ts",
     "test": "vitest run",
+    "test:alpha2": "pnpm run build && pnpm --dir ../working-activity-alpha2-compat install --frozen-lockfile --strict-peer-dependencies && pnpm --dir ../working-activity-alpha2-compat test",
     "verify:deps": "node scripts/verify-manifest-deps.mjs",
     "verify:lockfiles": "node scripts/verify-lockfiles.mjs",
     "prepublishOnly": "npm run verify:deps && npm run verify:lockfiles && npm run build && npm run build:client"
@@ -78,13 +79,13 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.2",
     "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-conversation": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.2",
+    "@deepseek-ai/dsh-session": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.2",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.2",
     "@deepseek-ai/schemastery": "^3.18.1",
     "react": "^18.2.0"
   },

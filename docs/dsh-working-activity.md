@@ -210,9 +210,10 @@ host Loader 条目（cordis.yml / bundle patch）
 ```sh
 pnpm install && pnpm run build   # 构建（host tsc + client tsc，产物进 lib/）
 pnpm run build:client           # 构建浏览器 bundle（tsdown → lib/client.js）
-pnpm test                        # 单测 + 集成测试（状态机/文案/自述/集成 34 项）
+pnpm test                        # 单元测试 + Host 集成测试
+pnpm run test:alpha2             # 隔离的 DSH 0.1.2-alpha.2 Host 集成测试
 ```
 
-> 测试在 DSH monorepo 内运行（vitest）；依赖已发布到 npm 的官方
-> `@deepseek-ai/dsh-*@0.1.0-rc.6` 包（见 package.json devDependencies），
-> 不再需要源码 workspace 链接。独立安装本包时没有 test 脚本，只有 `build`。
+> 主开发树保留 rc.6 Host/Web 基线；`test:alpha2` 使用独立 fixture 和锁文件加载
+> 已发布的 `@deepseek-ai/dsh-*@0.1.2-alpha.2`，避免把两套互斥 peer 图混装。
+> 不再需要 DSH 源码 workspace 链接。
