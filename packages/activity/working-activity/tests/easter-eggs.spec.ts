@@ -17,6 +17,12 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+/**
+ * Every phrase in `HOLIDAY_PHRASES['01-01']` must match this — including
+ * `新的一年，新的 bug` (no contiguous 新年). Keep in sync with the pool.
+ */
+const NEW_YEAR_PATTERN = /新年|元旦|开工|第一盘|第一行|新的一年/
+
 describe('isWeekend', () => {
   it('flags Saturday and Sunday only', () => {
     expect(isWeekend(new Date('2026-01-03T12:00:00'))).toBe(true) // Sat
@@ -40,7 +46,7 @@ describe('livelyThinkingPhrase', () => {
   it('picks a holiday phrase on a holiday before anything else', () => {
     const now = new Date('2026-01-01T12:00:00')
     const phrase = livelyThinkingPhrase(0, undefined, false, now, { rareEggs: false, weekend: false })
-    expect(phrase).toMatch(/新年|元旦|开工|第一盘|第一行/)
+    expect(phrase).toMatch(NEW_YEAR_PATTERN)
   })
 
   it('skips the holiday egg when the feature is off', () => {
@@ -48,7 +54,7 @@ describe('livelyThinkingPhrase', () => {
     const phrase = livelyThinkingPhrase(0, undefined, false, now, {
       rareEggs: false, weekend: false, holidays: false,
     })
-    expect(phrase).not.toMatch(/新年|元旦|开工|第一盘|第一行/)
+    expect(phrase).not.toMatch(NEW_YEAR_PATTERN)
   })
 
   it('draws a rare egg when Math.random lands in the 1/150 window', () => {
