@@ -328,6 +328,16 @@ describe('DSH 0.1.7-rc.2 compatibility', () => {
     try {
       await mountHost(ctx)
       activityFiber = await ctx.plugin(WorkingActivity, { publish: false, lang: 'zh' })
+      // A consumer (the TUI, or a browser carrier) reads the value two ways: the
+      // snapshot it asks for, and the change feed it subscribes to. Both must
+      // work off the same unit, so the feed is recorded from before the turn.
+      const pushed: { key: string; value: Record<string, unknown> }[] = []
+      const off = ctx.sessionProjections.onChanged((_session, key, value) => {
+        // The feed is host-wide, so the key is matched as a string here: this
+        // fixture must pass whether or not the plugin has taught the host's
+        // projection type table about its own key yet.
+        if (String(key) === 'workingActivity') pushed.push({ key: String(key), value: value as Record<string, unknown> })
+      })
       scriptToolTurn(ctx)
       const agent = await runToolTurn(ctx, 'rc2-projection')
 
@@ -335,6 +345,8 @@ describe('DSH 0.1.7-rc.2 compatibility', () => {
       const values = (snapshot as unknown as { values: Record<string, Record<string, unknown>> }).values
       const value = values.workingActivity
       console.log(`[rc2 projection] wire value: ${JSON.stringify(value)}`)
+      console.log(`[rc2 projection] change feed: ${pushed.length} pushes, phases ${JSON.stringify(pushed.map(item => item.value.phase))}`)
+      off()
 
       // Reading it proves both halves: the unit registered on this corridor's
       // contract shape, and the host validated our wire value with its schema.
@@ -344,6 +356,12 @@ describe('DSH 0.1.7-rc.2 compatibility', () => {
       expect(value.lang).toBe('zh')
       expect(typeof value.turnStartedAt).toBe('number')
       expect(typeof value.updatedAt).toBe('number')
+      // The feed a subscriber lives on must actually fire, and its last value
+      // must agree with the snapshot — a value that only exists when asked for
+      // would leave a push-driven client blank.
+      expect(pushed.length).toBeGreaterThan(0)
+      expect(pushed.at(-1)?.value.toolCount).toBe(value.toolCount)
+      expect(pushed.at(-1)?.value.phase).toBe(value.phase)
     } finally {
       await activityFiber?.dispose()
       await ctx.fiber.dispose()
