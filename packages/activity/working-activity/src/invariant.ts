@@ -47,10 +47,39 @@ function validateEvent(event: SessionEvent, fail: InvariantFailure): void {
   if (event.type === 'activity/status') validateStatus(event.data, fail)
 }
 
+/**
+ * A loaded session as the bootstrap scan must read it. The supported host lines
+ * spell the full-log read differently and neither spelling is guaranteed, so
+ * both stay optional and the scan probes rather than pinning a version:
+ * `snapshotEvents()` is what every first-party companion seeds from
+ * (`@deepseek-ai/dsh-session/lib/invariant.js` seeds each `ctx.sessions.list()`
+ * entry through it), while the `0.1.0-rc.6` line this package still compiles
+ * against exposes only the `events` accessor. On the `0.1.7-rc.2` line that
+ * accessor is gone, which is how the previous unconditional `session.events`
+ * read threw `TypeError` on the first non-empty session.
+ */
+interface LoadedSession {
+  /** Full immutable log snapshot (`0.1.7-rc.2` line and later). */
+  snapshotEvents?: () => readonly SessionEvent[]
+  /** Full immutable log accessor (`0.1.0-rc.6` line). */
+  readonly events?: readonly SessionEvent[]
+}
+
+/**
+ * The events of one already-loaded session across those two read shapes. A host
+ * exposing neither yields an empty log instead of aborting the companion: the
+ * bootstrap scan is best-effort, while the live `internal/dispatch` half must
+ * keep validating appended snapshots.
+ */
+function loadedEvents(session: LoadedSession): readonly SessionEvent[] {
+  if (typeof session.snapshotEvents === 'function') return session.snapshotEvents()
+  return session.events ?? []
+}
+
 /** Install validation for loaded and newly appended activity snapshots. */
 const install: InvariantInstaller = Object.assign((ctx: Context, fail: InvariantFailure) => {
   for (const session of ctx.sessions.list()) {
-    for (const event of session.events) validateEvent(event, fail)
+    for (const event of loadedEvents(session)) validateEvent(event, fail)
   }
   ctx.on('internal/dispatch', (_mode, eventName, args) => {
     if (eventName !== 'session/event') return

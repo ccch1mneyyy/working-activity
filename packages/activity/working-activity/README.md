@@ -42,6 +42,32 @@ Host and TUI integration supports the DSH `0.1.0-rc.6` and `0.1.1-rc` lines,
 plus `0.1.2-alpha.2`. The optional Web client still uses the rc client-runtime
 contract and is not covered by alpha.2 compatibility.
 
+## Optional invariant companion
+
+`./invariant` ships an `@deepseek-ai/dsh-invariants` companion that checks this
+package's own payload contract — an object `activity/status` snapshot, a phase
+from the published vocabulary, a non-empty `line`, non-negative finite metrics,
+string-or-absent `label`/`detail`/`phrase` — for snapshots already in loaded
+sessions and for every one appended afterwards.
+
+It is **opt-in**: this bundle's `cordis.patch.yml` inserts only the
+`working-activity` row, the host mounts one row per companion, and the registry
+alone installs no checks. Add both rows to the profile user layer
+(`$DSH_HOME/profiles/<profile>/cordis.patch.yml`):
+
+```yaml
+- insert:
+    - id: invariants
+      name: '@deepseek-ai/dsh-invariants'
+    - id: working-activity-invariant
+      name: 'dsh-working-activity/invariant'
+```
+
+The `name` must resolve this package's `./invariant` export subpath; the `id`
+follows the host's `<package>-invariant` naming (`session-invariant`,
+`agent-invariant`). Skip the `invariants` row where the composition already
+mounts the registry.
+
 ## TUI usage
 
 Install the plugin into a profile that composes the official `dsh-tui`, then
