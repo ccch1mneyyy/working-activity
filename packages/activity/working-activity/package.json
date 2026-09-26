@@ -56,7 +56,7 @@
     "verify:lockfiles": "node scripts/verify-lockfiles.mjs",
     "verify:client-bundle": "pnpm run build:client && node scripts/verify-client-bundle.mjs",
     "verify:host-vocabulary": "node scripts/verify-host-vocabulary.mjs",
-    "prepublishOnly": "npm run verify:deps && npm run verify:lockfiles && npm run verify:host-vocabulary && npm run build && npm run build:client"
+    "prepublishOnly": "npm run verify:deps && npm run verify:lockfiles && npm run verify:host-vocabulary && npm run build && npm run verify:client-bundle"
   },
   "license": "BSD-3-Clause",
   "dependencies": {

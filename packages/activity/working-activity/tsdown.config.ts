@@ -31,10 +31,16 @@ const PLATFORM_MODULES = [
   '@deepseek-ai/dsh-client-schema-form',
 ] as const
 
-/** Externals resolved from the loader module table (platform seed + the documented runtime exemption). */
+/**
+ * Externals resolved from the loader module table (the platform seed words).
+ *
+ * The retired `@deepseek-ai/dsh-client-runtime/client` exemption is gone with the
+ * transport it served: keeping a dead allowance here would let a future import of
+ * that frozen package resolve instead of failing the bundle purity gate, and the
+ * client half must never reach for it again (see src/client/activity.ts).
+ */
 const CLIENT_EXTERNALS: readonly string[] = [
   ...PLATFORM_MODULES,
-  '@deepseek-ai/dsh-client-runtime/client',
 ]
 
 /** Virtual-id wrapper keeping module CSS away from tsdown's own css pipeline. */
