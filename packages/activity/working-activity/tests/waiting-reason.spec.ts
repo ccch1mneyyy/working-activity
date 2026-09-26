@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ActivityTracker, type ActivityEvent, type TrackerConfig } from '../src/status.ts'
 import {
   APPROVAL_PHRASES, COMPACTION_START_PHRASES, CONTINUE_PHRASES, FAIL_PHRASES,
-  MODEL_QUIPS, RETRY_PHRASES,
+  MODEL_QUIPS, NIGHT_PHRASES, RETRY_PHRASES,
 } from '../src/phrases.ts'
 import { setLangOverride } from '../src/lang.ts'
 
@@ -124,6 +124,26 @@ describe('stall copy', () => {
     expect(restored.render().line).toBe(first)
     clock.advance(1_500) // crosses the next whole second: only the elapsed moved
     expect(tracker.render().line).not.toBe(first)
+  })
+})
+
+describe('one render, one clock', () => {
+  it('night copy follows the rendered instant, not the tracker clock', () => {
+    // A tracker whose clock supplier says noon, rendered "as of" 03:00 — the
+    // copy pools must follow the RENDER instant (one render, one time
+    // source); before, night/holiday copy read the clock supplier while the
+    // elapsed read the argument, so the two disagreed.
+    const noon = Date.parse('2026-03-16T12:00:00+08:00')
+    const night = Date.parse('2026-03-16T03:00:00+08:00')
+    const nightPool = new Set<string>(NIGHT_PHRASES)
+    let found = false
+    for (let seed = 0; seed < 400 && !found; seed++) {
+      const tracker = new ActivityTracker(CONFIG, () => noon)
+      tracker.onEvent({ kind: 'turn-start', at: noon + seed })
+      tracker.onEvent({ kind: 'stream-delta', at: noon + seed, stream: 'text', text: 'go' })
+      found = nightPool.has(tracker.render(night).phrase ?? '')
+    }
+    expect(found, 'some deterministic seed must draw night copy at a night instant').toBe(true)
   })
 })
 

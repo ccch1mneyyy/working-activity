@@ -247,9 +247,11 @@ export function createActivityProjection(options: ActivityProjectionOptions): {
       for (const activityEvent of events) tracker.onEvent(activityEvent)
       const next = tracker.snapshot()
       const updatedAt = typeof event.time === 'number' ? event.time : state.updatedAt
-      if (updatedAt === state.updatedAt && JSON.stringify(next) === JSON.stringify(state.tracker)) {
-        return state
-      }
+      // `next` is a fresh object by construction (`snapshot()` rebuilds), so
+      // content-comparing it against the previous state could only ever
+      // suppress the exotic same-millisecond no-op duplicate — while paying a
+      // double JSON serialization of the whole fold on EVERY modelled event.
+      // An occasional extra publish of an identical line is cheaper than that.
       return { tracker: next, updatedAt }
     },
   }

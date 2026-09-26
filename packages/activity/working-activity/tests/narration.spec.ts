@@ -74,6 +74,14 @@ describe('extractNarration', () => {
     expect(extractNarration('⏵ 修\u0007样式\r继续')).toBe('修 样式 继续')
   })
 
+  it('counts emoji as two columns in the narration budget', () => {
+    // The pools carry 🧧 🐳 🎃; at one column each, an "80-column" narration
+    // ran ~40 columns over.
+    const narration = extractNarration(`⏵ ${'🧧'.repeat(60)}`)
+    const emoji = Array.from(narration ?? '').filter(ch => ch === '🧧').length
+    expect(emoji).toBeLessThanOrEqual(40)
+  })
+
   it('keeps a long English narration intact through the newline', () => {
     expect(extractNarration(
       '⏵ Updating the plan-exit test to wait for the final assistant response\nContinuing normally.',

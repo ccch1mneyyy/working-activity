@@ -423,9 +423,8 @@ export class ActivityTracker {
         return
       }
       case 'step-start':
-        if (this.phase === 'waiting' && !this.waitingFirstToken) {
-          // A new step without streamed output yet — stay waiting.
-        }
+        // No phase change of its own: a step without streamed output stays
+        // waiting until its first delta promotes it.
         return
       case 'stream-start':
         // A new attempt must not inherit the previous attempt's provisional
@@ -949,7 +948,7 @@ export class ActivityTracker {
       // follows the CURRENT phase and the window follows the phase's own start,
       // so neither the copy nor the cadence depends on how often this is read.
       const rotateMs = this.rarePool() ? RARE_ROTATE_MS : PHRASE_ROTATE_MS
-      const phrase = pending ?? this.phraseForSlot(this.phraseSlot(nowMs, rotateMs), rotateMs)
+      const phrase = pending ?? this.phraseForSlot(this.phraseSlot(nowMs, rotateMs), rotateMs, nowMs)
       // The indicator animation (whale etc.) already signals activity, so the
       // pi DOT_FRAMES ellipsis breathing is dropped for the DSH line.
       const tps = this.tpsPrefix(nowMs)
@@ -1221,10 +1220,14 @@ export class ActivityTracker {
    * previous phase's pool in. Deriving from (phase, phase start, seed, slot)
    * makes a read idempotent and keeps the pools apart by construction.
    */
-  private phraseForSlot(slot: number, rotateMs: number): string {
+  private phraseForSlot(slot: number, rotateMs: number, nowMs: number): string {
     const at: PhraseSlot = { seed: this.turnStartedAt, slot }
     const features = this.config.features ?? {}
-    const now = new Date(this.now())
+    // The RENDER instant, not the tracker's clock supplier: one render, one
+    // time source. Night/holiday copy used to read `this.now()` while the
+    // elapsed read `nowMs`, so rendering "as of" another instant (a test, a
+    // historical value) picked copy from a different moment than it displayed.
+    const now = new Date(nowMs)
     if (this.phase === 'waiting') return waitingPhrase(undefined, at)
     // Eggs belong to the turn's first thinking window — the waiting phase is
     // usually over before a window elapses, so a greeting shown there would
@@ -1327,6 +1330,10 @@ function isWide(cp: number): boolean {
     (cp >= 0xff00 && cp <= 0xff60) || // full-width forms
     (cp >= 0xffe0 && cp <= 0xffe6) || // full-width signs
     (cp >= 0x20000 && cp <= 0x3fffd) // CJK extensions
+    // Emoji occupy two columns in every mainstream terminal; counting them as
+    // one let an "80-column" narration run ~40 columns over budget (the pools
+    // carry 🧧 🐳 🎃).
+    || (cp >= 0x1f000 && cp <= 0x1faff) // cards, emoji, symbols, pictographs
   )
 }
 
