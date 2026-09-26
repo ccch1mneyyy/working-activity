@@ -44,6 +44,27 @@ export function toActivityEvents(event: SessionEvent): readonly ActivityEvent[] 
     // written before (or without) frames correct. This is not an abandonment.
     return [{ kind: 'stream-reset', at: event.time, reason: 'attempt-settled' }]
   }
+  if (eventType === 'model/selection') {
+    // The selection the host validated for subsequent prompt assembly. Declared
+    // by the session controller's module merge, so it is absent from the
+    // rc.6-era `SessionEventMap` this package compiles against — compared as a
+    // widened string for the same reason `assistant/attempt` is.
+    //
+    // A selection without a usable model id says nothing about the route, and
+    // the tracker deduplicates repeats, so every selection is forwarded here.
+    const model = (event.data as { model?: unknown }).model
+    if (typeof model !== 'string' || model === '') return []
+    return [{ kind: 'route-change', at: event.time, model }]
+  }
+  if (eventType === 'user/message') {
+    // A compaction replaces the context with a checkpoint message; its source
+    // kind is the durable marker. The source carries no overflow flag (only the
+    // compaction id and the initiating command), so a finished compaction is
+    // all this signal can prove.
+    const source = (event.data as { message?: { source?: { kind?: unknown } } }).message?.source
+    if (source?.kind !== 'compact-checkpoint') return []
+    return [{ kind: 'compaction', at: event.time }]
+  }
   switch (event.type) {
     case 'turn/start':
       return [{ kind: 'turn-start', at: event.time }]

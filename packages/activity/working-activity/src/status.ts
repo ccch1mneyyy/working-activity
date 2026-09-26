@@ -26,7 +26,7 @@ export type ActivityPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
  * persisted projection checkpoint from an older build is discarded (the host
  * refolds the log) instead of being misread as the new shape.
  */
-export const TRACKER_SNAPSHOT_VERSION = 1
+export const TRACKER_SNAPSHOT_VERSION = 2
 
 /** One snapshot of the model's activity, renderable by any UI. */
 export interface ActivityState {
@@ -141,6 +141,8 @@ interface TrackerSnapshotShape {
   readonly pendingPhrase: string | null
   readonly pendingUntil: number
   readonly gitBranch: string | null
+  /** Last announced model route, so a restored tracker keeps the dedupe. */
+  readonly model: string | null
   readonly streak: number
   readonly lastToolEndAt: number
   readonly maxStreak: number
@@ -239,6 +241,8 @@ export class ActivityTracker {
   private pendingUntil = 0
   /** Git branch of the session cwd (fed by the host, best-effort). */
   private gitBranch: string | undefined
+  /** Last model route announced, so a repeated selection stays quiet. */
+  private model: string | undefined
   /** Consecutive fast tool streak (combo). */
   private streak = 0
   private lastToolEndAt = 0
@@ -284,8 +288,17 @@ export class ActivityTracker {
     this.pendingUntil = this.now() + PENDING_MS
   }
 
-  /** The model was switched: quip for the new model id. */
+  /**
+   * The model was switched: quip for the new model id.
+   *
+   * Repeats are ignored. A `model/selection` event is logged whenever the host
+   * validates a selection — including a re-selection of the current model and
+   * every replay of the log — and re-announcing the same model would replace
+   * whatever the line is saying with a stale quip.
+   */
   onModelSwitch(modelId: string): void {
+    if (modelId === this.model) return
+    this.model = modelId
     if (!this.config.phrases) return
     const quip = modelQuip(modelId)
     if (quip !== null) {
@@ -605,6 +618,7 @@ export class ActivityTracker {
       pendingPhrase: this.pendingPhrase,
       pendingUntil: this.pendingUntil,
       gitBranch: this.gitBranch ?? null,
+      model: this.model ?? null,
       streak: this.streak,
       lastToolEndAt: this.lastToolEndAt,
       maxStreak: this.maxStreak,
@@ -669,6 +683,7 @@ export class ActivityTracker {
     tracker.pendingPhrase = data.pendingPhrase
     tracker.pendingUntil = data.pendingUntil
     tracker.gitBranch = data.gitBranch ?? undefined
+    tracker.model = data.model ?? undefined
     tracker.streak = data.streak
     tracker.lastToolEndAt = data.lastToolEndAt
     tracker.maxStreak = data.maxStreak
