@@ -6,12 +6,13 @@
  * @module @deepseek-ai/dsh-working-activity/status
  */
 
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { ActivityEvent } from './activity-event.js'
 import {
   actionFor, compactPhrase, continuePhrase, donePhrase, failPhrase, fmtDuration,
   holidayPhrase, isGitTool, isNight, isWeekend, modelQuip, overflowPhrase, rarePhrase,
   RARE_CHANCE, RARE_PHRASES, EN_RARE_PHRASES, thinkingPhrase, weekendPhrase, waitingPhrase,
 } from './phrases.js'
+import { feedSessionEvent } from './compat/session-events.js'
 import { t } from './lang.js'
 
 /** Public status phases a UI can render. */
@@ -255,11 +256,15 @@ export class ActivityTracker {
     this.gitBranch = branch
   }
 
-  /** Consume one durable session event (turn/step/tool/stream). */
-  onSessionEvent(event: SessionEvent): void {
-    switch (event.type) {
-      case 'turn/start': {
-        const at = event.time
+  /**
+   * Consume one normalized activity event. This is the state machine's only
+   * input: host payload shapes are normalized in `src/compat/*` first, so a
+   * host-line drift never reaches this switch.
+   */
+  onEvent(event: ActivityEvent): void {
+    switch (event.kind) {
+      case 'turn-start': {
+        const at = event.at
         this.turnStartedAt = at
         this.thinkingStartedAt = at
         this.thinkingMs = 0
@@ -287,38 +292,51 @@ export class ActivityTracker {
         this.setPhase('waiting', at)
         return
       }
-      case 'step/start':
+      case 'step-start':
         if (this.phase === 'waiting' && !this.waitingFirstToken) {
           // A new step without streamed output yet — stay waiting.
         }
         return
-      case 'assistant/chunk': {
-        const chunk = event.data.chunk
-        this.lastChunkAt = event.time
-        if (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') {
-          if (this.waitingFirstToken) {
-            this.waitingFirstToken = false
-            this.setPhase('thinking', event.time)
-            this.thinkingStartedAt = event.time
-          }
-          this.recentStream = (this.recentStream + chunk.text).slice(-STREAM_BUFFER_CHARS)
-          const narration = extractNarration(this.recentStream)
-          if (narration !== null) this.narratedText = narration
-          // Streaming token estimate for the tps prefix (pi parity).
-          this.tokBuf += estimateTokens(chunk.text)
+      case 'stream-start':
+        // Opening an attempt changes no state on its own: the first delta is
+        // what promotes waiting → thinking, and it carries the text.
+        return
+      case 'stream-delta': {
+        const at = event.at
+        this.lastChunkAt = at
+        if (this.waitingFirstToken) {
+          this.waitingFirstToken = false
+          this.setPhase('thinking', at)
+          this.thinkingStartedAt = at
         }
+        this.recentStream = (this.recentStream + event.text).slice(-STREAM_BUFFER_CHARS)
+        const narration = extractNarration(this.recentStream)
+        if (narration !== null) this.narratedText = narration
+        // Streaming token estimate for the tps prefix (pi parity).
+        this.tokBuf += estimateTokens(event.text)
         return
       }
-      case 'assistant/message': {
-        const usage = event.data.usage
+      case 'stream-reset': {
+        // An abandoned attempt (or a partial settlement) must not leave its
+        // provisional narration or token estimate behind for the next attempt.
+        this.recentStream = ''
+        this.narratedText = null
+        this.tokBuf = 0
+        this.lastChunkAt = 0
+        this.waitingFirstToken = true
+        if (this.activeTools.size === 0) this.setPhase('waiting', event.at)
+        return
+      }
+      case 'assistant-settled': {
+        const usage = event.usage
         if (usage !== undefined) {
           this.turnTokens += usage.inputTokens + usage.outputTokens
             + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
         }
         return
       }
-      case 'tool/call': {
-        const at = event.time
+      case 'tool-start': {
+        const at = event.at
         if (this.phase === 'thinking' || this.phase === 'waiting') {
           this.thinkingMs += at - this.thinkingStartedAt
         }
@@ -327,31 +345,29 @@ export class ActivityTracker {
           ? this.streak + 1
           : 1
         if (this.streak > this.maxStreak) this.maxStreak = this.streak
-        if (/^(?:subagent|agent|task)$/i.test(event.data.name)) this.subagentCount += 1
-        const parsed = parseArguments(event.data.arguments)
-        const action = this.config.phrases ? actionFor(event.data.name, this.customActions) : event.data.name
-        const detail = detailFor(event.data.name, parsed, this.config.detailLimit)
+        if (/^(?:subagent|agent|task)$/i.test(event.name)) this.subagentCount += 1
+        const parsed = parseArguments(event.arguments)
+        const action = this.config.phrases ? actionFor(event.name, this.customActions) : event.name
+        const detail = detailFor(event.name, parsed, this.config.detailLimit)
         const active: ActiveTool = {
-          callId: event.data.callId,
-          name: event.data.name,
+          callId: event.callId,
+          name: event.name,
           action,
           detail,
-          isGit: isGitTool(event.data.name, parsed),
+          isGit: isGitTool(event.name, parsed),
           startedAt: at,
           failed: false,
         }
-        this.activeTools.set(event.data.callId, active)
+        this.activeTools.set(event.callId, active)
         this.setPhase('tool', at)
         return
       }
-      case 'tool/result': {
-        const at = event.time
-        // `ToolResultMessage.content` is the single-block `[ToolResultBlock]`
-        // tuple, so `block` is never absent and always a tool-result block.
-        const block = event.data.message.content[0]
-        const active = this.activeTools.get(block.toolCallId)
+      case 'tool-end': {
+        const at = event.at
+        const callId = event.callId
+        const active = this.activeTools.get(callId)
         if (active === undefined) return
-        active.failed = event.data.error !== undefined || block.isError === true
+        active.failed = event.failed
         active.endedAt = at
         this.toolMs += at - active.startedAt
         this.toolCount += 1
@@ -363,7 +379,7 @@ export class ActivityTracker {
           endedAt: at,
         })
         if (this.doneQueue.length > DONE_QUEUE_MAX) this.doneQueue.shift()
-        this.activeTools.delete(block.toolCallId)
+        this.activeTools.delete(callId)
         if (this.activeTools.size === 0) {
           // Back to thinking (or a trailing done card if the turn just closed).
           this.setPhase('thinking', at)
@@ -371,8 +387,8 @@ export class ActivityTracker {
         }
         return
       }
-      case 'turn/end': {
-        const at = event.time
+      case 'turn-end': {
+        const at = event.at
         if (this.activeTools.size > 0) {
           // Tools still running at turn end: count their elapsed time as tool time.
           for (const tool of this.activeTools.values()) {
@@ -392,12 +408,36 @@ export class ActivityTracker {
         } else {
           this.donePrefix = t('done-prefix')
         }
+        if (event.interrupted === true) this.onInterrupted()
         this.setPhase('done', at)
         return
       }
+      case 'route-change':
+        this.onModelSwitch(event.model)
+        return
+      case 'compaction':
+        this.onCompact(event.overflow === true ? 'overflow' : 'done')
+        return
+      case 'agent-status':
+        this.onAgentStatus(event.status)
+        return
       default:
         return
     }
+  }
+
+  /**
+   * Feed one raw durable session event.
+   * @deprecated Host-shape input kept for one release so an already-published
+   * consumer that drives this tracker itself (dsh-TUI ≤ 0.11.x calls this
+   * method) keeps working across the upgrade. New code normalizes through
+   * `src/compat/*` and calls {@link onEvent}. The parameter type is inferred
+   * from the compat function on purpose — this module must not import a DSH
+   * type.
+   * @param event - Raw durable session event.
+   */
+  onSessionEvent(event: Parameters<typeof feedSessionEvent>[1]): void {
+    feedSessionEvent(this, event)
   }
 
   /** Render the current status snapshot at a wall-clock instant. */
