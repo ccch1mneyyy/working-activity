@@ -131,14 +131,26 @@ function scriptToolTurn(ctx: Context): MockAdapter {
   return adapter
 }
 
+/** The `⏵` self-narration line the plugin is contracted to surface live. */
+const NARRATION = '正在修登录页样式'
+
+/** Register a scripted adapter that streams one narrated text answer. */
+function scriptNarratedTurn(ctx: Context): MockAdapter {
+  const adapter = new MockAdapter([
+    textResponse(`⏵ ${NARRATION}。\n\n完事。`),
+  ])
+  ctx.llm.registerAdapter(['mock'], adapter)
+  return adapter
+}
+
 /** Create one scripted agent and drive it to idle. */
-async function runToolTurn(ctx: Context, sessionId: string): Promise<Agent> {
+async function runToolTurn(ctx: Context, sessionId: string, prompt = 'list files'): Promise<Agent> {
   // On this host line `AgentLoop.create()` is async (it awaits unpublished
   // setup and the ordered `agent/created` listeners before publishing).
   const agent = await ctx.agentLoop.create(SessionId(sessionId), { provider: 'mock', model: 'mock' })
   const idle = idleWaiter(ctx, agent)
   agent.followup(createUserMessage({
-    content: [{ type: 'text', text: 'list files' }],
+    content: [{ type: 'text', text: prompt }],
     source: { kind: 'user' },
   }))
   await idle
@@ -168,9 +180,11 @@ function attemptIds(frames: readonly AssistantStreamFrame[]): string[] {
   return [...new Set(frames.map(frame => String(frame.attemptId)))].sort()
 }
 
-/** Mount the plugin, run one scripted tool turn, and collect its snapshots. */
+/** Mount the plugin, run one scripted turn, and collect its snapshots. */
 async function runActivityTurn(
   sessionId: string,
+  script: (ctx: Context) => void = scriptToolTurn,
+  prompt = 'list files',
 ): Promise<{ readonly events: readonly SessionEvent[]; readonly snapshots: readonly ActivitySnapshot[] }> {
   const ctx = new Context()
   let activityFiber: Fiber | undefined
@@ -178,11 +192,11 @@ async function runActivityTurn(
     await mountHost(ctx)
     const recorder = recordSessionEvents(ctx)
     activityFiber = await ctx.plugin(WorkingActivity, { publish: true, lang: 'zh' })
-    scriptToolTurn(ctx)
+    script(ctx)
     // The plugin registers its own log-only event type at load; without it the
     // strict read paths (and therefore every published snapshot) refuse the log.
     expect(KNOWN_SESSION_EVENT_TYPES.has('activity/status')).toBe(true)
-    const agent = await runToolTurn(ctx, sessionId)
+    const agent = await runToolTurn(ctx, sessionId, prompt)
     const events = recorder.eventsOf(agent.session)
     return { events, snapshots: activitySnapshots(events) }
   } finally {
@@ -282,6 +296,26 @@ describe('DSH 0.1.7-rc.2 compatibility', () => {
     expect(done).toBeDefined()
     expect(done?.toolCount).toBe(1)
     expect(done?.line).toContain('1 工具')
+  })
+
+  // ---------------------------------------------------------------------------
+  // (b2) Realtime: the line must move on LIVE frames, not only on durable
+  // events. On this host line `assistant/chunk` is gone, so a tracker that
+  // only folds durable events has no first-token promotion and no `⏵`
+  // narration at all: the phase stays `waiting` until the turn ends.
+  // ---------------------------------------------------------------------------
+  it('P1: surfaces the thinking phase and the ⏵ narration from live stream frames', async () => {
+    const { snapshots } = await runActivityTurn('rc2-activity-live', scriptNarratedTurn, 'fix the login page')
+    const phases = snapshots.map(snapshot => snapshot.phase)
+    console.log(`[rc2 live] activity/status phases: ${JSON.stringify(phases)}`)
+    console.log(`[rc2 live] narrated snapshots: ${JSON.stringify(snapshots.filter(s => s.line.includes('⏵')))}`)
+
+    // The promotion must happen on the first streamed token: no tool event ever
+    // fires in this turn, so `thinking` can only come from the live frames.
+    expect(phases).toContain('thinking')
+    const narrated = snapshots.find(snapshot => snapshot.line.includes('⏵'))
+    expect(narrated).toBeDefined()
+    expect(narrated?.line).toContain(NARRATION)
   })
 
   // ---------------------------------------------------------------------------

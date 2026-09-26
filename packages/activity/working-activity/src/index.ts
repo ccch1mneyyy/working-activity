@@ -19,10 +19,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Session } from '@deepseek-ai/dsh-session'
 // Type-only: resolves the agent/status cordis event declaration.
-import type {} from '@deepseek-ai/dsh-agent'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 // Type-only: resolves ctx.systemPrompt for the narration section injection.
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { ActivityTracker } from './status.js'
+import { feedStreamFrame } from './compat/assistant-stream.js'
 import { registerActivityEventType } from './registration.js'
 import { setLangOverride, t } from './lang.js'
 import { DEFAULT_PRESET } from './frames.js'
@@ -251,6 +252,23 @@ export function apply(ctx: Context, config: Config = {}): void {
     activeSession = session
     publish(session, tracker.render())
   })
+
+  // Live model output. On the current host line the durable `assistant/chunk`
+  // event this plugin used to fold is gone — streamed deltas arrive as
+  // transient `agent/assistant-stream` frames instead — so the realtime half of
+  // the line (first-token promotion, `⏵` narration, tok/s) rides on these
+  // frames. Subscribed through a cast because the declared dev baseline
+  // (`@deepseek-ai/dsh-agent@0.1.0-rc.6`) predates the event; on that corridor
+  // the subscription simply never fires and the durable path above still runs.
+  // The cursor that orders frames lives with the emitting agent, so a replaced
+  // agent (whose revision restarts at 1) is never mistaken for a stale one.
+  ctx.on('agent/assistant-stream' as never, (({ agent, frame }: { agent: Agent; frame: unknown }) => {
+    const session = agent.session
+    const tracker = trackerFor(session)
+    feedStreamFrame(tracker, agent, frame)
+    activeSession = session
+    publish(session, tracker.render())
+  }) as never)
 
   ctx.on('session/disposed', (session) => {
     trackers.delete(session)

@@ -298,16 +298,27 @@ export class ActivityTracker {
         }
         return
       case 'stream-start':
-        // Opening an attempt changes no state on its own: the first delta is
-        // what promotes waiting → thinking, and it carries the text.
+        // A new attempt must not inherit the previous attempt's provisional
+        // text: the narration buffer and the token estimate are attempt-scoped.
+        // The phase is untouched — the first delta promotes waiting → thinking.
+        this.recentStream = ''
+        this.narratedText = null
+        this.tokBuf = 0
+        this.lastChunkAt = 0
         return
       case 'stream-delta': {
         const at = event.at
         this.lastChunkAt = at
         if (this.waitingFirstToken) {
           this.waitingFirstToken = false
-          this.setPhase('thinking', at)
-          this.thinkingStartedAt = at
+          // A delta that arrives while a tool runs must not steal the phase:
+          // models may stream text after a tool call inside the same attempt,
+          // and the tool is what the user is actually waiting on. The tool
+          // result hands the phase back to thinking on its own.
+          if (this.activeTools.size === 0) {
+            this.setPhase('thinking', at)
+            this.thinkingStartedAt = at
+          }
         }
         this.recentStream = (this.recentStream + event.text).slice(-STREAM_BUFFER_CHARS)
         const narration = extractNarration(this.recentStream)

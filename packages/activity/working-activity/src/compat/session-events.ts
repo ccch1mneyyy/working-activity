@@ -31,6 +31,19 @@ const INTERRUPTED_REASONS: readonly string[] = ['aborted', 'interrupted']
  * @returns the domain events this host event carries, in order.
  */
 export function toActivityEvents(event: SessionEvent): readonly ActivityEvent[] {
+  // `assistant/attempt` exists on the 0.1.5+ host lines only, and this package
+  // still compiles against `@deepseek-ai/dsh-session@0.1.0-rc.6`, where the
+  // member is absent from `SessionEventMap` — a literal `case` for it would not
+  // typecheck there (TS2367, no overlap). Comparing the widened string keeps one
+  // adapter serving every corridor.
+  const eventType: string = event.type
+  if (eventType === 'assistant/attempt') {
+    // A PARTIAL settlement: the durable text may be shorter than what was
+    // streamed, so provisional narration must go. The live `end` frame reports
+    // the same outcome; folding the durable event too keeps replay of logs
+    // written before (or without) frames correct. This is not an abandonment.
+    return [{ kind: 'stream-reset', at: event.time, reason: 'attempt-settled' }]
+  }
   switch (event.type) {
     case 'turn/start':
       return [{ kind: 'turn-start', at: event.time }]
