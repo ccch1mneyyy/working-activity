@@ -18,6 +18,10 @@ import {
 } from '../src/projection.ts'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { ActivityTracker, type TrackerConfig } from '../src/status.ts'
+import {
+  THINKING_PHRASES, WAITING_PHRASES, EN_THINKING_PHRASES, EN_WAITING_PHRASES,
+  THINKING_TIERS, EN_THINKING_TIERS,
+} from '../src/phrases.ts'
 
 const CONFIG: TrackerConfig = { phrases: true, detailLimit: 40, showIdle: false }
 const START = new Date('2026-03-16T12:00:00').getTime()
@@ -276,5 +280,69 @@ describe('unusable checkpoints degrade, never throw', () => {
       const next = projection.apply(payload, event('turn/start', START, { turn: 1 }))
       expect((projection.view(next) as WorkingActivityView).phase).toBe('waiting')
     }
+  })
+})
+
+describe('the waiting pool ends when output exists', () => {
+  const waiting = new Set<string>([...WAITING_PHRASES, ...EN_WAITING_PHRASES])
+  /** The thinking side includes the long-thinking tier pools. */
+  const thinking = new Set<string>([
+    ...THINKING_PHRASES, ...EN_THINKING_PHRASES,
+    ...THINKING_TIERS.flatMap(tier => [...tier.pool]),
+    ...EN_THINKING_TIERS.flatMap(tier => [...tier.pool]),
+  ])
+
+  it('a live first-token overlay promotes the fold out of the waiting pool', () => {
+    // rc.2 reality: deltas are transient frames and never fold, so between
+    // the first token and the next durable event the fold still says waiting —
+    // reported live, the line said "still queuing" while the model had been
+    // writing for a minute. The host hands the first-token instant over with
+    // the narration overlay.
+    let current = START
+    const overlay = {
+      narration: '修池切换的问题',
+      lastChunkAt: START + 2_000,
+      firstTokenAt: START + 2_000,
+    }
+    const projection = createActivityProjection({
+      trackerConfig: CONFIG,
+      now: () => current,
+      lang: () => 'zh',
+      live: () => overlay,
+    })
+    let state = projection.init()
+    state = projection.apply(state, event('turn/start', START, { turn: 1 }))
+    // The honest fold, no host knowledge: waiting copy.
+    current = START + 2_500
+    const bare = createActivityProjection({
+      trackerConfig: CONFIG, now: () => current, lang: () => 'zh',
+    })
+    const folded = bare.view(state) as WorkingActivityView
+    expect(folded.phase).toBe('waiting')
+    expect(waiting.has(folded.phrase ?? '')).toBe(true)
+    // Narration long stale (past the 5s grace) + the first token: the pool
+    // the reader sees must be the THINKING one.
+    current = START + 40_000
+    const viewed = projection.view(state) as WorkingActivityView
+    expect(viewed.phase).toBe('thinking')
+    expect(thinking.has(viewed.phrase ?? ''), `thinking phrase expected, got ${viewed.phrase}`).toBe(true)
+  })
+
+  it('a settled message promotes a replayed fold to thinking', () => {
+    // A fold that never saw frames (a replayed log, a restart) still learns
+    // from the durable settlement that tokens existed.
+    const { projection, tick } = build()
+    let state = projection.init()
+    state = projection.apply(state, event('turn/start', START, { turn: 1 }))
+    tick(9_000)
+    state = projection.apply(state, event('assistant/message', START + 9_000, {
+      turn: 1,
+      step: 1,
+      message: { role: 'assistant', id: 'm1', content: [{ type: 'text', text: '好的' }] },
+      usage: { inputTokens: 10, outputTokens: 5 },
+    }))
+    const viewed = projection.view(state) as WorkingActivityView
+    expect(viewed.phase).toBe('thinking')
+    expect(thinking.has(viewed.phrase ?? ''), `thinking phrase expected, got ${viewed.phrase}`).toBe(true)
   })
 })

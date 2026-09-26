@@ -27,7 +27,7 @@ export type ActivityPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
  * persisted projection checkpoint from an older build is discarded (the host
  * refolds the log) instead of being misread as the new shape.
  */
-export const TRACKER_SNAPSHOT_VERSION = 5
+export const TRACKER_SNAPSHOT_VERSION = 6
 
 /** One snapshot of the model's activity, renderable by any UI. */
 export interface ActivityState {
@@ -143,6 +143,8 @@ interface TrackerSnapshotShape {
   /** When the turn's first tool started (drives the thinking→doing opening line). */
   readonly firstToolStartedAt: number
   readonly waitingFirstToken: boolean
+  /** When the first streamed token arrived (0 = none yet; live-only on rc.2). */
+  readonly firstTokenAt: number
   readonly narratedText: string | null
   readonly lastChunkAt: number
   readonly recentStream: string
@@ -280,6 +282,14 @@ export class ActivityTracker {
   private doneQueue: DoneTool[] = []
   private thinkingPhases = 0
   private waitingFirstToken = false
+  /**
+   * When the first streamed token arrived (0 = none yet).
+   *
+   * Live-only knowledge on the current host line (deltas are frames, not
+   * durable events), so the projection learns it through the live overlay —
+   * without it the projected line stays in the waiting pool all generation.
+   */
+  private firstTokenAt = 0
   /** Latest `⏵` self-narration line extracted from the stream, or null. */
   private narratedText: string | null = null
   /** Wall-clock time of the most recent stream delta (narration freshness). */
@@ -341,6 +351,7 @@ export class ActivityTracker {
       this.phase = 'waiting'
       this.phaseStartedAt = this.now()
       this.waitingFirstToken = true
+      this.firstTokenAt = 0
     }
   }
 
@@ -404,6 +415,7 @@ export class ActivityTracker {
         this.activeTools.clear()
         this.doneQueue = []
         this.waitingFirstToken = true
+        this.firstTokenAt = 0
         this.narratedText = null
         this.lastChunkAt = 0
         this.recentStream = ''
@@ -440,17 +452,7 @@ export class ActivityTracker {
         this.lastChunkAt = at
         // Output is flowing again — whatever stalled the turn is over.
         this.clearWaitingReason()
-        if (this.waitingFirstToken) {
-          this.waitingFirstToken = false
-          // A delta that arrives while a tool runs must not steal the phase:
-          // models may stream text after a tool call inside the same attempt,
-          // and the tool is what the user is actually waiting on. The tool
-          // result hands the phase back to thinking on its own.
-          if (this.activeTools.size === 0) {
-            this.setPhase('thinking', at)
-            this.thinkingStartedAt = at
-          }
-        }
+        this.promoteFirstToken(at)
         // Streaming token estimate for the tps prefix (pi parity).
         this.tokBuf += estimateTokens(event.text)
         // Only VISIBLE output narrates. The injected contract asks for the `⏵`
@@ -474,6 +476,7 @@ export class ActivityTracker {
         this.tokBuf = 0
         this.lastChunkAt = 0
         this.waitingFirstToken = true
+        this.firstTokenAt = 0
         if (this.activeTools.size === 0) this.setPhase('waiting', event.at)
         return
       }
@@ -483,6 +486,10 @@ export class ActivityTracker {
           this.turnTokens += usage.inputTokens + usage.outputTokens
             + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
         }
+        // A settled message proves tokens existed, so a fold (or replay) that
+        // never saw the frames still leaves the waiting pool: the first token
+        // really happened, just earlier than this event's timestamp.
+        this.promoteFirstToken(event.at)
         // The settled text is where a projection (or a replayed log) recovers
         // the narration: frames are live-only, this event is durable.
         if (event.text !== undefined) {
@@ -722,6 +729,7 @@ export class ActivityTracker {
       thinkingPhases: this.thinkingPhases,
       firstToolStartedAt: this.firstToolStartedAt,
       waitingFirstToken: this.waitingFirstToken,
+      firstTokenAt: this.firstTokenAt,
       narratedText: this.narratedText,
       lastChunkAt: this.lastChunkAt,
       recentStream: this.recentStream,
@@ -792,6 +800,7 @@ export class ActivityTracker {
     tracker.thinkingPhases = data.thinkingPhases
     tracker.firstToolStartedAt = data.firstToolStartedAt
     tracker.waitingFirstToken = data.waitingFirstToken
+    tracker.firstTokenAt = data.firstTokenAt
     tracker.narratedText = data.narratedText
     tracker.lastChunkAt = data.lastChunkAt
     tracker.recentStream = data.recentStream
@@ -973,16 +982,58 @@ export class ActivityTracker {
   }
 
   /**
+   * The live facts a projection cannot fold, when any.
+   *
+   * A projection folds DURABLE events only, but two things the line displays
+   * are born on live stream frames: the `⏵` narration, and — the one this
+   * exists for — **that the first token already arrived**. Without the latter
+   * a projected line sits in the waiting pool for the entire generation (the
+   * frames never fold on the current host line), telling the user "still
+   * queuing" while the model has been writing for a minute. A live host hands
+   * both over per read (see `ActivityProjectionOptions.live`).
+   */
+  liveState(): {
+    readonly narration?: string
+    readonly lastChunkAt?: number
+    readonly firstTokenAt?: number
+  } {
+    const overlay: { narration?: string; lastChunkAt?: number; firstTokenAt?: number } = {}
+    if (this.narratedText !== null) {
+      overlay.narration = this.narratedText
+      overlay.lastChunkAt = this.lastChunkAt
+    }
+    if (this.firstTokenAt > 0) overlay.firstTokenAt = this.firstTokenAt
+    return Object.keys(overlay).length > 0 ? overlay : {}
+  }
+
+  /**
    * The live narration this tracker is currently showing, if any.
    *
-   * A projection folds DURABLE events only, so a live host that also sees
-   * stream frames has to hand the frame-derived narration to the projected
-   * value separately (see `ActivityProjectionOptions.live`); this is that
-   * payload, and `undefined` means "nothing live to overlay".
+   * Narrow view of {@link liveState} for callers that only narrate.
    */
   liveNarration(): { readonly narration: string; readonly lastChunkAt: number } | undefined {
     if (this.narratedText === null) return undefined
     return { narration: this.narratedText, lastChunkAt: this.lastChunkAt }
+  }
+
+  /**
+   * Apply the live host's facts to a (restored) projected copy.
+   *
+   * The state itself never changes — the overlay paints a throwaway render:
+   * the narration when the host has one, and the first-token promotion when
+   * the host has seen output the fold could not see.
+   * @param live - What the live host knows (any subset).
+   */
+  applyLiveState(live: {
+    narration?: string
+    lastChunkAt?: number
+    firstTokenAt?: number
+  }): void {
+    if (live.narration !== undefined && live.lastChunkAt !== undefined) {
+      this.narratedText = live.narration
+      this.lastChunkAt = live.lastChunkAt
+    }
+    if (live.firstTokenAt !== undefined) this.promoteFirstToken(live.firstTokenAt)
   }
 
   /**
@@ -992,8 +1043,25 @@ export class ActivityTracker {
    * host paints the freshest narration it has over the folded value.
    */
   applyLiveNarration(narration: string, at: number): void {
-    this.narratedText = narration
-    this.lastChunkAt = at
+    this.applyLiveState({ narration, lastChunkAt: at })
+  }
+
+  /**
+   * The first streamed token arrived at `at` — leave the waiting pool.
+   *
+   * Idempotent (a second call does nothing), and a delta that arrives while a
+   * tool runs must not steal the phase: models may stream text after a tool
+   * call inside the same attempt, and the tool is what the user is actually
+   * waiting on — the tool result hands the phase back to thinking on its own.
+   */
+  private promoteFirstToken(at: number): void {
+    if (!this.waitingFirstToken) return
+    this.waitingFirstToken = false
+    this.firstTokenAt = at
+    if (this.activeTools.size === 0) {
+      this.setPhase('thinking', at)
+      this.thinkingStartedAt = at
+    }
   }
 
   /**

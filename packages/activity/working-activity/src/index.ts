@@ -261,17 +261,23 @@ export function apply(ctx: Context, config: Config = {}): void {
   // `stateOf` is the only way back from a session to the state a read will see,
   // and it exists on the current line but not on the rc.6-era registry — there
   // the overlay stays empty and settled-message narration carries the line.
-  const liveNarration = new WeakMap<object, { narration: string; lastChunkAt: number }>()
+  const liveNarration = new WeakMap<object, { narration?: string; lastChunkAt?: number; firstTokenAt?: number }>()
   /** The registry, once injected: `stateOf` is how the overlay finds its state. */
   let projectionService: { stateOf?: (session: Session, key: string) => unknown } | undefined
 
-  /** Publish the tracker's current narration for the projected value to overlay. */
-  const noteLiveNarration = (session: Session, tracker: ActivityTracker): void => {
+  /**
+   * Publish the tracker's live-only facts for the projected value to overlay.
+   *
+   * The narration AND the first-token instant: deltas never fold on the
+   * current host line, so without the latter the projected line stays in the
+   * waiting pool for the whole generation while the model is already writing.
+   */
+  const noteLiveOverlay = (session: Session, tracker: ActivityTracker): void => {
     const state = projectionService?.stateOf?.(session, ACTIVITY_PROJECTION_KEY)
     if (state === null || typeof state !== 'object') return
-    const narration = tracker.liveNarration()
-    if (narration === undefined) return
-    liveNarration.set(state, narration)
+    const overlay = tracker.liveState()
+    if (overlay.narration === undefined && overlay.firstTokenAt === undefined) return
+    liveNarration.set(state, overlay)
   }
 
   ctx.inject(['sessionProjections'] as never, ((projectionCtx: Context) => {
@@ -417,11 +423,11 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.on('session/event', (session, event) => {
     const runtime = runtimeFor(session)
     runtime.tracker.onSessionEvent(event)
-    // Re-key the live narration onto the fold's new state object: `apply`
+    // Re-key the live overlay onto the fold's new state object: `apply`
     // returns a fresh cell per fold, so without this the overlay would stay on
     // the previous cell and a read right after a durable event (a tool
     // starting, say) would lose the freshest `⏵` line until the next frame.
-    noteLiveNarration(session, runtime.tracker)
+    noteLiveOverlay(session, runtime.tracker)
     feed(runtime, runtime.tracker.render())
   })
 
@@ -437,10 +443,11 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.on('agent/assistant-stream' as never, (({ agent, frame }: { agent: Agent; frame: unknown }) => {
     const runtime = runtimeFor(agent.session)
     feedStreamFrame(runtime.tracker, agent, frame)
-    // Hand the freshest narration to the projected value as well: a projection
-    // folds committed events only, so without this overlay the line a client
-    // reads would never carry the model's own `⏵` words (see src/projection.ts).
-    noteLiveNarration(agent.session, runtime.tracker)
+    // Hand the live facts to the projected value as well: a projection folds
+    // committed events only, so without this overlay the line a client reads
+    // would never carry the model's own `⏵` words — nor learn that the first
+    // token already arrived (frames never fold; see src/projection.ts).
+    noteLiveOverlay(agent.session, runtime.tracker)
     feed(runtime, runtime.tracker.render())
   }) as never)
 

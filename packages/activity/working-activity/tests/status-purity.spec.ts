@@ -85,10 +85,9 @@ describe('a read is a function of the state', () => {
   })
 
   it('leaves a stable snapshot version for persistent checkpoints', () => {
-    // v5: the waiting-reason stall fields arrived and the read-side `reminded`
-    // flag left (the reminder is derived now); the bump retires checkpoints
-    // written by the older shapes.
-    expect(TRACKER_SNAPSHOT_VERSION).toBe(5)
+    // v6: the live-only `firstTokenAt` joined (the overlay promotes a waiting
+    // fold to thinking); v5 retired the read-side `reminded` flag.
+    expect(TRACKER_SNAPSHOT_VERSION).toBe(6)
   })
 })
 

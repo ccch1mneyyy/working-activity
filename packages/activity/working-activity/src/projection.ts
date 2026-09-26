@@ -121,12 +121,22 @@ const viewSchema = z.object({
   lang: z.enum(['zh', 'en']),
 })
 
-/** What a live host can overlay onto the folded value. */
+/** What a live host can overlay onto the folded value (any subset). */
 export interface LiveActivityOverlay {
   /** The `⏵` narration most recently streamed for this session. */
-  readonly narration: string
+  readonly narration?: string
   /** When that narration arrived (its freshness clock). */
-  readonly lastChunkAt: number
+  readonly lastChunkAt?: number
+  /**
+   * When the first streamed token arrived, when the host knows it.
+   *
+   * Deltas are live frames on the current host line and never fold, so
+   * without this the projected line sits in the waiting pool for the entire
+   * generation — telling the user "still queuing" while the model writes.
+   * Applying it promotes a waiting fold to thinking (the same rule a live
+   * delta follows: never while a tool holds the phase).
+   */
+  readonly firstTokenAt?: number
 }
 
 /** Knobs a projection needs; all of them are also plugin configuration. */
@@ -199,12 +209,12 @@ export function createActivityProjection(options: ActivityProjectionOptions): {
     // start instant from the rendered elapsed must agree exactly.
     const at = now()
     const tracker = restoreOrFresh(state)
-    // A projection folds durable events, but the `⏵` self-narration is born on
-    // live stream frames. The host that owns those frames overlays the freshest
-    // one here, so the value keeps the live narration without writing anything
-    // to the session log.
+    // A projection folds durable events, but two things the line displays are
+    // born on live stream frames: the `⏵` self-narration, and that the first
+    // token already arrived. The host that owns the frames overlays both here,
+    // so the value keeps the live truth without writing anything to the log.
     const live = options.live?.(state)
-    if (live !== undefined) tracker.applyLiveNarration(live.narration, live.lastChunkAt)
+    if (live !== undefined) tracker.applyLiveState(live)
     const rendered = tracker.render(at)
     const running = rendered.phase !== 'idle' && rendered.phase !== 'done'
     return {
