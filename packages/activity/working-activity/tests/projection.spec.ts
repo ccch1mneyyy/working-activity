@@ -1,0 +1,188 @@
+/**
+ * `workingActivity` projection tests (the Web transport).
+ *
+ * The projection is the only path by which a browser sees the line, so these
+ * cases pin the three things the host contract cares about — the shape a client
+ * reads, the same-reference rule for unmodeled events, and the dual-spelling
+ * definition that has to register on both supported host corridors.
+ * @module @deepseek-ai/dsh-working-activity/tests/projection
+ */
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { setLangOverride } from '../src/lang.ts'
+import {
+  ACTIVITY_PROJECTION_KEY,
+  ACTIVITY_PROJECTION_STATE_VERSION,
+  createActivityProjection,
+  type WorkingActivityView,
+} from '../src/projection.ts'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { TrackerConfig } from '../src/status.ts'
+
+const CONFIG: TrackerConfig = { phrases: true, detailLimit: 40, showIdle: false }
+const START = new Date('2026-03-16T12:00:00').getTime()
+
+beforeEach(() => setLangOverride('zh'))
+afterEach(() => setLangOverride('auto'))
+
+/** A projection on a clock the test drives. */
+function build(start = START): {
+  projection: ReturnType<typeof createActivityProjection>
+  tick: (ms: number) => void
+  at: () => number
+} {
+  let current = start
+  const projection = createActivityProjection({
+    trackerConfig: CONFIG,
+    now: () => current,
+    lang: () => 'zh',
+  })
+  return { projection, tick: (ms: number) => { current += ms }, at: () => current }
+}
+
+/** A durable session event with a chosen timestamp. */
+function event(type: string, time: number, data: Record<string, unknown> = {}): SessionEvent {
+  return { type, seq: 0, time, data } as unknown as SessionEvent
+}
+
+describe('projection definition shape', () => {
+  it('carries every host contract spelling', () => {
+    const { projection } = build()
+    // Three corridors, three spellings: 0.1.7-rc.2 reads `stateSchema` + `wire`;
+    // 0.1.2-alpha.2 reads `stateSchema` + top-level `viewSchema` + `view`; the
+    // rc.6-era contract reads `schema` + `view`. One definition satisfies all.
+    expect(projection.key).toBe(ACTIVITY_PROJECTION_KEY)
+    expect(projection.stateVersion).toBe(ACTIVITY_PROJECTION_STATE_VERSION)
+    expect(typeof projection.init).toBe('function')
+    expect(typeof projection.apply).toBe('function')
+    expect(projection.stateSchema).toBeDefined()
+    expect(projection.wire.viewSchema).toBeDefined()
+    expect(projection.schema).toBeDefined()
+    expect(projection.viewSchema).toBeDefined()
+    expect(projection.view).toBe(projection.wire.view)
+    // All three schema spellings describe the same payload.
+    expect(projection.schema).toBe(projection.wire.viewSchema)
+    expect(projection.viewSchema).toBe(projection.wire.viewSchema)
+  })
+
+  it('validates its own wire value', () => {
+    const { projection } = build()
+    const state = projection.init()
+    expect(() => projection.wire.viewSchema.parse(projection.view(state))).not.toThrow()
+    // A value the schema would reject must fail loudly rather than reach a client.
+    expect(() => projection.wire.viewSchema.parse({ phase: 'nonsense' })).toThrow()
+  })
+
+  it('validates the fold state it persists', () => {
+    const { projection } = build()
+    expect(() => projection.stateSchema.parse(projection.init())).not.toThrow()
+    expect(() => projection.stateSchema.parse({ tracker: {}, updatedAt: 'later' })).toThrow()
+  })
+})
+
+describe('projection folding', () => {
+  it('starts idle and renders nothing', () => {
+    const { projection } = build()
+    const view = projection.view(projection.init()) as WorkingActivityView
+    expect(view.phase).toBe('idle')
+    expect(view.line).toBe('')
+    expect(view.live).toBe(false)
+    expect(view.lang).toBe('zh')
+    expect(view.updatedAt).toBe(0)
+  })
+
+  it('follows a turn from waiting through a tool to its count', () => {
+    const { projection, tick, at } = build()
+    let state = projection.init()
+
+    state = projection.apply(state, event('turn/start', START, { turn: 1 }))
+    let view = projection.view(state) as WorkingActivityView
+    expect(view.phase).toBe('waiting')
+    expect(view.live).toBe(true)
+    expect(view.updatedAt).toBe(START)
+    expect(view.turnStartedAt).toBe(START)
+
+    tick(1500)
+    state = projection.apply(state, event('tool/call', at(), {
+      turn: 1, step: 1, callId: 'c1', name: 'bash', arguments: '{"command":"npm test"}',
+    }))
+    view = projection.view(state) as WorkingActivityView
+    expect(view.phase).toBe('tool')
+    expect(view.label).toBeDefined()
+    expect(view.detail).toBe('npm test')
+    // A live tool phase counts its own elapsed, so a client needs the instant.
+    expect(view.phaseStartedAt).toBe(at())
+
+    tick(2000)
+    state = projection.apply(state, event('tool/result', at(), {
+      turn: 1,
+      step: 1,
+      message: {
+        role: 'tool',
+        id: 'm1',
+        source: { kind: 'tool', callId: 'c1' },
+        toolCallId: 'c1',
+        content: [{ type: 'text', text: 'ok' }],
+        isError: false,
+      },
+    }))
+    view = projection.view(state) as WorkingActivityView
+    expect(view.phase).toBe('thinking')
+    expect(view.toolCount).toBe(1)
+  })
+
+  it('returns the same state reference for an event it does not model', () => {
+    const { projection, at } = build()
+    const state = projection.apply(projection.init(), event('turn/start', START, { turn: 1 }))
+    // The host treats an unchanged reference as "zero downstream work"; a
+    // rebuilt state on every durable event would broadcast for nothing.
+    expect(projection.apply(state, event('step/end', at(), { turn: 1, step: 1 }))).toBe(state)
+    expect(projection.apply(state, event('some/unmodelled', at(), {}))).toBe(state)
+  })
+
+  it('carries the language through to the client', () => {
+    let current = START
+    const projection = createActivityProjection({
+      trackerConfig: CONFIG,
+      now: () => current,
+      lang: () => 'en',
+    })
+    const state = projection.apply(projection.init(), event('turn/start', current, { turn: 1 }))
+    current += 10
+    expect((projection.view(state) as WorkingActivityView).lang).toBe('en')
+  })
+
+  it('survives a persisted checkpoint round trip', () => {
+    const { projection, tick, at } = build()
+    let state = projection.apply(projection.init(), event('turn/start', START, { turn: 1 }))
+    tick(1000)
+    state = projection.apply(state, event('tool/call', at(), {
+      turn: 1, step: 1, callId: 'c1', name: 'read', arguments: '{"file_path":"a.ts"}',
+    }))
+    const before = projection.view(state) as WorkingActivityView
+
+    // Exactly what the host persists and hands back: plain JSON.
+    const checkpoint = JSON.parse(JSON.stringify(state)) as unknown
+    const resumed = projection.view(checkpoint) as WorkingActivityView
+    expect(resumed.phase).toBe(before.phase)
+    expect(resumed.line).toBe(before.line)
+    expect(resumed.toolCount).toBe(before.toolCount)
+    expect(resumed.phaseStartedAt).toBe(before.phaseStartedAt)
+
+    // And it keeps folding from there.
+    tick(500)
+    const next = projection.apply(checkpoint, event('tool/result', at(), {
+      turn: 1,
+      step: 1,
+      message: {
+        role: 'tool',
+        id: 'm2',
+        source: { kind: 'tool', callId: 'c1' },
+        toolCallId: 'c1',
+        content: [{ type: 'text', text: 'ok' }],
+        isError: false,
+      },
+    }))
+    expect((projection.view(next) as WorkingActivityView).toolCount).toBe(1)
+  })
+})

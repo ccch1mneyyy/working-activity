@@ -58,6 +58,9 @@
     "prepublishOnly": "npm run verify:deps && npm run verify:lockfiles && npm run verify:host-vocabulary && npm run build && npm run build:client"
   },
   "license": "BSD-3-Clause",
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ccch1mneyyy/working-activity.git"

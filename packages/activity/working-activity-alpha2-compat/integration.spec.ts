@@ -80,6 +80,20 @@ describe('DSH 0.1.2-alpha.2 compatibility', () => {
       const events = activityEvents(agent.session.events)
       expect(events.map(event => event.data.phase)).toContain('tool')
       expect(events.findLast(event => event.data.phase === 'done')?.data.line).toContain('1 工具')
+
+      // The Web projection must register on THIS corridor's contract shape as
+      // well: this line spells the wire schema as a top-level `viewSchema`
+      // instead of `wire.viewSchema`. One definition carries every spelling —
+      // see src/projection.ts — and reading our key back proves the host both
+      // accepted the unit and validated our value with its own schema.
+      const snapshot = ctx.sessionProjections.snapshot(agent.session)
+      const values = (snapshot as unknown as { values: Record<string, Record<string, unknown>> }).values
+      const activity = values.workingActivity
+      console.log(`[alpha2 projection] wire value: ${JSON.stringify(activity)}`)
+      expect(activity).toBeDefined()
+      expect(activity.phase).toBe('done')
+      expect(activity.toolCount).toBe(1)
+      expect(typeof activity.turnStartedAt).toBe('number')
     } finally {
       await activityFiber?.dispose()
       await ctx.fiber.dispose()

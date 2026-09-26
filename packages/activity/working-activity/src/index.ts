@@ -23,9 +23,11 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 // Type-only: resolves ctx.systemPrompt for the narration section injection.
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { ActivityTracker } from './status.js'
+import type { TrackerConfig } from './status.js'
 import { feedStreamFrame } from './compat/assistant-stream.js'
+import { createActivityProjection } from './projection.js'
 import { registerActivityEventType } from './registration.js'
-import { setLangOverride, t } from './lang.js'
+import { langNow, setLangOverride, t } from './lang.js'
 import { DEFAULT_PRESET } from './frames.js'
 import type { ActivityState } from './status.js'
 import type { ActivityStatusEvent } from './events.js'
@@ -202,24 +204,40 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
   }
 
+  /** Tracker knobs shared by the live runtimes and the Web projection. */
+  const trackerConfig: TrackerConfig = {
+    phrases: resolved.phrases,
+    detailLimit: resolved.detailLimit,
+    showIdle: false,
+    features: resolved.features,
+    customPhrases: resolved.customPhrases,
+    showTokPerSec: resolved.showTokPerSec,
+    workRemindAt: resolved.workRemindAt,
+  }
+
+  // Web transport: a client-visible session projection. Registered only when the
+  // host provides the registry (the TUI-only composition does not), and only
+  // after it is mounted, hence `inject`. One definition serves both host
+  // contract shapes — see src/projection.ts for why that is a dual-spelling
+  // object rather than a version probe.
+  ctx.inject(['sessionProjections'] as never, ((projectionCtx: Context) => {
+    const registry = (projectionCtx as unknown as {
+      sessionProjections?: { register(definition: unknown): () => void }
+    }).sessionProjections
+    if (registry === undefined) return
+    registry.register(createActivityProjection({
+      trackerConfig,
+      customActions: resolved.customActions,
+      lang: langNow,
+    }))
+  }) as never)
+
   const runtimeFor = (session: Session): SessionRuntime => {
     let runtime = runtimes.get(session)
     if (runtime === undefined) {
       runtime = {
         session,
-        tracker: new ActivityTracker(
-          {
-            phrases: resolved.phrases,
-            detailLimit: resolved.detailLimit,
-            showIdle: false,
-            features: resolved.features,
-            customPhrases: resolved.customPhrases,
-            showTokPerSec: resolved.showTokPerSec,
-            workRemindAt: resolved.workRemindAt,
-          },
-          Date.now,
-          resolved.customActions,
-        ),
+        tracker: new ActivityTracker(trackerConfig, Date.now, resolved.customActions),
         lastPublishAt: 0,
       }
       runtimes.set(session, runtime)

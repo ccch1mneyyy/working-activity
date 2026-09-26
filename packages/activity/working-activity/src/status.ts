@@ -18,6 +18,16 @@ import { t } from './lang.js'
 /** Public status phases a UI can render. */
 export type ActivityPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
 
+/**
+ * Compatibility handle for {@link ActivityTracker.snapshot} output.
+ *
+ * The snapshot shape is private to this module; this number is the only part a
+ * consumer may rely on. Bump it whenever the emitted shape changes, so a
+ * persisted projection checkpoint from an older build is discarded (the host
+ * refolds the log) instead of being misread as the new shape.
+ */
+export const TRACKER_SNAPSHOT_VERSION = 1
+
 /** One snapshot of the model's activity, renderable by any UI. */
 export interface ActivityState {
   /** Which activity phase the model is in right now. */
@@ -98,6 +108,46 @@ interface DoneTool {
   readonly detail: string
   readonly failed: boolean
   readonly endedAt: number
+}
+
+/**
+ * The wire shape of {@link ActivityTracker.snapshot} — module-private on
+ * purpose. Consumers hand the value straight back to
+ * {@link ActivityTracker.restore}; `snapshot()` is typed as `unknown` so the
+ * field list never becomes published API that has to be kept stable.
+ */
+interface TrackerSnapshotShape {
+  readonly version: number
+  readonly phase: ActivityPhase
+  readonly phaseStartedAt: number
+  readonly turnStartedAt: number
+  readonly thinkingStartedAt: number
+  readonly thinkingMs: number
+  readonly toolMs: number
+  readonly toolCount: number
+  readonly activeTools: readonly ActiveTool[]
+  readonly doneQueue: readonly DoneTool[]
+  readonly previousPhrase: string | null
+  readonly phraseChangedAt: number
+  readonly waitingFirstToken: boolean
+  readonly narratedText: string | null
+  readonly lastChunkAt: number
+  readonly recentStream: string
+  readonly turnTokens: number
+  readonly donePrefix: string
+  readonly holidayShown: boolean
+  readonly rareShown: boolean
+  readonly weekendShown: boolean
+  readonly pendingPhrase: string | null
+  readonly pendingUntil: number
+  readonly gitBranch: string | null
+  readonly streak: number
+  readonly lastToolEndAt: number
+  readonly maxStreak: number
+  readonly subagentCount: number
+  readonly reminded: boolean
+  readonly tokBuf: number
+  readonly tokWindowStart: number
 }
 
 /** Format one tool into its display fragment (`跑个命令 npm test`). */
@@ -517,6 +567,116 @@ export class ActivityTracker {
       toolMs: this.toolMs,
       toolCount: this.toolCount,
     }
+  }
+
+  /**
+   * Opaque, JSON-safe snapshot of this tracker's complete state.
+   *
+   * A persisted projection checkpoint has to resume folding **without**
+   * replaying a session's whole log, so the state machine must be able to hand
+   * its state out and take it back. The shape is not public API: pass the value
+   * straight back to {@link ActivityTracker.restore}. {@link TRACKER_SNAPSHOT_VERSION}
+   * is the compatibility handle between the two.
+   * @returns every field the fold depends on, as JSON-safe values.
+   */
+  snapshot(): unknown {
+    const data: TrackerSnapshotShape = {
+      version: TRACKER_SNAPSHOT_VERSION,
+      phase: this.phase,
+      phaseStartedAt: this.phaseStartedAt,
+      turnStartedAt: this.turnStartedAt,
+      thinkingStartedAt: this.thinkingStartedAt,
+      thinkingMs: this.thinkingMs,
+      toolMs: this.toolMs,
+      toolCount: this.toolCount,
+      activeTools: [...this.activeTools.values()],
+      doneQueue: this.doneQueue,
+      previousPhrase: this.previousPhrase ?? null,
+      phraseChangedAt: this.phraseChangedAt,
+      waitingFirstToken: this.waitingFirstToken,
+      narratedText: this.narratedText,
+      lastChunkAt: this.lastChunkAt,
+      recentStream: this.recentStream,
+      turnTokens: this.turnTokens,
+      donePrefix: this.donePrefix,
+      holidayShown: this.holidayShown,
+      rareShown: this.rareShown,
+      weekendShown: this.weekendShown,
+      pendingPhrase: this.pendingPhrase,
+      pendingUntil: this.pendingUntil,
+      gitBranch: this.gitBranch ?? null,
+      streak: this.streak,
+      lastToolEndAt: this.lastToolEndAt,
+      maxStreak: this.maxStreak,
+      subagentCount: this.subagentCount,
+      reminded: this.reminded,
+      tokBuf: this.tokBuf,
+      tokWindowStart: this.tokWindowStart,
+    }
+    return data
+  }
+
+  /**
+   * Rebuild a tracker from {@link snapshot} output.
+   *
+   * The behavioral knobs are not part of the snapshot, so they are passed in
+   * again; everything the fold accumulates is restored. Mutable entries are
+   * cloned, so the restored tracker can never write back into the value the
+   * caller still holds as a checkpoint.
+   * @param config - Behavioral knobs.
+   * @param now - Wall-clock supplier.
+   * @param customActions - Custom action pools.
+   * @param payload - A value previously returned by `snapshot()`.
+   * @returns an equivalent tracker that can keep folding.
+   * @throws when the payload is not a snapshot of {@link TRACKER_SNAPSHOT_VERSION}
+   * — a caller holding a stale checkpoint must refold the log rather than render
+   * a state it cannot interpret.
+   */
+  static restore(
+    config: TrackerConfig,
+    now: () => number = Date.now,
+    customActions?: Readonly<Record<string, readonly string[]>>,
+    payload?: unknown,
+  ): ActivityTracker {
+    const data = payload as TrackerSnapshotShape | undefined
+    if (data === undefined || data === null || typeof data !== 'object'
+      || data.version !== TRACKER_SNAPSHOT_VERSION) {
+      throw new Error(
+        `working-activity: unsupported tracker snapshot (expected version ${TRACKER_SNAPSHOT_VERSION})`,
+      )
+    }
+    const tracker = new ActivityTracker(config, now, customActions)
+    tracker.phase = data.phase
+    tracker.phaseStartedAt = data.phaseStartedAt
+    tracker.turnStartedAt = data.turnStartedAt
+    tracker.thinkingStartedAt = data.thinkingStartedAt
+    tracker.thinkingMs = data.thinkingMs
+    tracker.toolMs = data.toolMs
+    tracker.toolCount = data.toolCount
+    tracker.activeTools = new Map(data.activeTools.map(tool => [tool.callId, { ...tool }]))
+    tracker.doneQueue = data.doneQueue.map(tool => ({ ...tool }))
+    tracker.previousPhrase = data.previousPhrase ?? undefined
+    tracker.phraseChangedAt = data.phraseChangedAt
+    tracker.waitingFirstToken = data.waitingFirstToken
+    tracker.narratedText = data.narratedText
+    tracker.lastChunkAt = data.lastChunkAt
+    tracker.recentStream = data.recentStream
+    tracker.turnTokens = data.turnTokens
+    tracker.donePrefix = data.donePrefix
+    tracker.holidayShown = data.holidayShown
+    tracker.rareShown = data.rareShown
+    tracker.weekendShown = data.weekendShown
+    tracker.pendingPhrase = data.pendingPhrase
+    tracker.pendingUntil = data.pendingUntil
+    tracker.gitBranch = data.gitBranch ?? undefined
+    tracker.streak = data.streak
+    tracker.lastToolEndAt = data.lastToolEndAt
+    tracker.maxStreak = data.maxStreak
+    tracker.subagentCount = data.subagentCount
+    tracker.reminded = data.reminded
+    tracker.tokBuf = data.tokBuf
+    tracker.tokWindowStart = data.tokWindowStart
+    return tracker
   }
 
   /**

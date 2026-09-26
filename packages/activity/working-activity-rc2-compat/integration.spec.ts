@@ -319,6 +319,38 @@ describe('DSH 0.1.7-rc.2 compatibility', () => {
   })
 
   // ---------------------------------------------------------------------------
+  // Web transport: the plugin registers a client-visible projection, and the
+  // real registry drives it over committed events. Nothing may land in the log.
+  // ---------------------------------------------------------------------------
+  it('registers the workingActivity projection and folds the turn into it', async () => {
+    const ctx = new Context()
+    let activityFiber: Fiber | undefined
+    try {
+      await mountHost(ctx)
+      activityFiber = await ctx.plugin(WorkingActivity, { publish: false, lang: 'zh' })
+      scriptToolTurn(ctx)
+      const agent = await runToolTurn(ctx, 'rc2-projection')
+
+      const snapshot = ctx.sessionProjections.snapshot(agent.session)
+      const values = (snapshot as unknown as { values: Record<string, Record<string, unknown>> }).values
+      const value = values.workingActivity
+      console.log(`[rc2 projection] wire value: ${JSON.stringify(value)}`)
+
+      // Reading it proves both halves: the unit registered on this corridor's
+      // contract shape, and the host validated our wire value with its schema.
+      expect(value).toBeDefined()
+      expect(value.phase).toBe('done')
+      expect(value.toolCount).toBe(1)
+      expect(value.lang).toBe('zh')
+      expect(typeof value.turnStartedAt).toBe('number')
+      expect(typeof value.updatedAt).toBe('number')
+    } finally {
+      await activityFiber?.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  // ---------------------------------------------------------------------------
   // Host seams the plugin mounts through: none of them may throw or go silent.
   // ---------------------------------------------------------------------------
   it('still injects the plugin system-prompt narration section on this host line', async () => {
