@@ -45,6 +45,56 @@ function event(type: string, time: number, data: Record<string, unknown> = {}): 
   return { type, seq: 0, time, data } as unknown as SessionEvent
 }
 
+describe('narration through the projection', () => {
+  /** A settled assistant message whose text opens with the `⏵` line. */
+  function narratedTurn(at: number): SessionEvent {
+    return event('assistant/message', at, {
+      usage: { inputTokens: 10, outputTokens: 5 },
+      message: {
+        role: 'assistant',
+        id: 'm1',
+        content: [{ type: 'text', text: '⏵ 正在修登录页样式。\n\n完事。' }],
+      },
+    })
+  }
+
+  it('recovers the model line from a settled message', () => {
+    // Live narration arrives on stream frames, which a projection never sees;
+    // the settled message is the durable half, so a replayed log (or a client
+    // that missed the frames) still gets the model's own words.
+    const { projection, at } = build()
+    let state = projection.apply(projection.init(), event('turn/start', START, { turn: 1 }))
+    state = projection.apply(state, narratedTurn(START + 500))
+
+    const view = projection.view(state) as WorkingActivityView
+    expect(view.line).toContain('⏵ 正在修登录页样式')
+    expect(view.phrase).toBe('正在修登录页样式')
+  })
+
+  it('overlays the live narration a host supplies', () => {
+    // The host that owns the frames hands the freshest line over per read; the
+    // value keeps everything else from the log.
+    let current = START
+    const live = { narration: '跑一下测试', lastChunkAt: START + 1000 }
+    const projection = createActivityProjection({
+      trackerConfig: CONFIG,
+      now: () => current,
+      lang: () => 'zh',
+      live: () => live,
+    })
+    let state = projection.apply(projection.init(), event('turn/start', START, { turn: 1 }))
+    state = projection.apply(state, event('step/start', START + 100, { turn: 1, step: 1 }))
+    current = START + 1200
+
+    const view = projection.view(state) as WorkingActivityView
+    expect(view.line).toContain('⏵ 跑一下测试')
+    // Past the narration grace window the overlay stops showing, with no state
+    // change: the live payload's own clock decides.
+    current = START + 20_000
+    expect((projection.view(state) as WorkingActivityView).line).not.toContain('跑一下测试')
+  })
+})
+
 describe('projection definition shape', () => {
   it('carries every host contract spelling', () => {
     const { projection } = build()

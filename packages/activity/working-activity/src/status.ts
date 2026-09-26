@@ -9,8 +9,9 @@
 import type { ActivityEvent } from './activity-event.js'
 import {
   actionFor, compactPhrase, continuePhrase, donePhrase, failPhrase, fmtDuration,
-  holidayPhrase, isGitTool, isNight, isWeekend, modelQuip, overflowPhrase, rarePhrase,
-  RARE_CHANCE, RARE_PHRASES, EN_RARE_PHRASES, thinkingPhrase, weekendPhrase, waitingPhrase,
+  holidayPhrase, isGitTool, isNight, isWeekend, mixSlot, modelQuip, overflowPhrase, rarePhrase,
+  RARE_CHANCE, thinkingPhrase, weekendPhrase, waitingPhrase,
+  type PhraseSlot,
 } from './phrases.js'
 import { feedSessionEvent } from './compat/session-events.js'
 import { t } from './lang.js'
@@ -26,7 +27,7 @@ export type ActivityPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
  * persisted projection checkpoint from an older build is discarded (the host
  * refolds the log) instead of being misread as the new shape.
  */
-export const TRACKER_SNAPSHOT_VERSION = 2
+export const TRACKER_SNAPSHOT_VERSION = 3
 
 /** One snapshot of the model's activity, renderable by any UI. */
 export interface ActivityState {
@@ -127,17 +128,14 @@ interface TrackerSnapshotShape {
   readonly toolCount: number
   readonly activeTools: readonly ActiveTool[]
   readonly doneQueue: readonly DoneTool[]
-  readonly previousPhrase: string | null
-  readonly phraseChangedAt: number
+  /** Thinking phases entered this turn — the rare egg shows in the first one. */
+  readonly thinkingPhases: number
   readonly waitingFirstToken: boolean
   readonly narratedText: string | null
   readonly lastChunkAt: number
   readonly recentStream: string
   readonly turnTokens: number
   readonly donePrefix: string
-  readonly holidayShown: boolean
-  readonly rareShown: boolean
-  readonly weekendShown: boolean
   readonly pendingPhrase: string | null
   readonly pendingUntil: number
   readonly gitBranch: string | null
@@ -218,8 +216,7 @@ export class ActivityTracker {
   private toolCount = 0
   private activeTools = new Map<string, ActiveTool>()
   private doneQueue: DoneTool[] = []
-  private previousPhrase: string | undefined
-  private phraseChangedAt = 0
+  private thinkingPhases = 0
   private waitingFirstToken = false
   /** Latest `⏵` self-narration line extracted from the stream, or null. */
   private narratedText: string | null = null
@@ -231,10 +228,6 @@ export class ActivityTracker {
   private turnTokens = 0
   /** Completion prefix drawn ONCE at turn end so the done line stays stable. */
   private donePrefix = t('done-prefix')
-  /** Easter eggs shown once per turn (holiday / rare / weekend). */
-  private holidayShown = false
-  private rareShown = false
-  private weekendShown = false
   /** One-off copy pinned by an external event (interrupt / model switch /
    *  compaction / work reminder), shown until it expires. */
   private pendingPhrase: string | null = null
@@ -340,10 +333,9 @@ export class ActivityTracker {
         this.narratedText = null
         this.lastChunkAt = 0
         this.recentStream = ''
-        // Easter eggs are once-per-turn: a fresh turn can roll them again.
-        this.holidayShown = false
-        this.rareShown = false
-        this.weekendShown = false
+        // Eggs are once-per-turn and derived from the turn's seed, so a fresh
+        // turn only needs its phase counter cleared.
+        this.thinkingPhases = 0
         // Per-turn stats reset; the pending quip (interrupt/model/compact)
         // survives across the turn boundary so it shows on the next think.
         this.streak = 0
@@ -406,6 +398,15 @@ export class ActivityTracker {
         if (usage !== undefined) {
           this.turnTokens += usage.inputTokens + usage.outputTokens
             + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+        }
+        // The settled text is where a projection (or a replayed log) recovers
+        // the narration: frames are live-only, this event is durable.
+        if (event.text !== undefined) {
+          const narration = extractNarration(event.text)
+          if (narration !== null) {
+            this.narratedText = narration
+            this.lastChunkAt = event.at
+          }
         }
         return
       }
@@ -604,17 +605,13 @@ export class ActivityTracker {
       toolCount: this.toolCount,
       activeTools: [...this.activeTools.values()],
       doneQueue: this.doneQueue,
-      previousPhrase: this.previousPhrase ?? null,
-      phraseChangedAt: this.phraseChangedAt,
+      thinkingPhases: this.thinkingPhases,
       waitingFirstToken: this.waitingFirstToken,
       narratedText: this.narratedText,
       lastChunkAt: this.lastChunkAt,
       recentStream: this.recentStream,
       turnTokens: this.turnTokens,
       donePrefix: this.donePrefix,
-      holidayShown: this.holidayShown,
-      rareShown: this.rareShown,
-      weekendShown: this.weekendShown,
       pendingPhrase: this.pendingPhrase,
       pendingUntil: this.pendingUntil,
       gitBranch: this.gitBranch ?? null,
@@ -669,17 +666,13 @@ export class ActivityTracker {
     tracker.toolCount = data.toolCount
     tracker.activeTools = new Map(data.activeTools.map(tool => [tool.callId, { ...tool }]))
     tracker.doneQueue = data.doneQueue.map(tool => ({ ...tool }))
-    tracker.previousPhrase = data.previousPhrase ?? undefined
-    tracker.phraseChangedAt = data.phraseChangedAt
+    tracker.thinkingPhases = data.thinkingPhases
     tracker.waitingFirstToken = data.waitingFirstToken
     tracker.narratedText = data.narratedText
     tracker.lastChunkAt = data.lastChunkAt
     tracker.recentStream = data.recentStream
     tracker.turnTokens = data.turnTokens
     tracker.donePrefix = data.donePrefix
-    tracker.holidayShown = data.holidayShown
-    tracker.rareShown = data.rareShown
-    tracker.weekendShown = data.weekendShown
     tracker.pendingPhrase = data.pendingPhrase
     tracker.pendingUntil = data.pendingUntil
     tracker.gitBranch = data.gitBranch ?? undefined
@@ -753,22 +746,20 @@ export class ActivityTracker {
   private liveWakeAt(nowMs: number, elapsedFrom: number): number | undefined {
     return minWake(
       secondBoundary(elapsedFrom, nowMs),
-      this.rotationWakeAt(),
+      this.rotationWakeAt(nowMs),
       this.narrationWakeAt(nowMs),
       this.tpsWakeAt(nowMs),
     )
   }
 
   /** When the displayed phrase is replaced: a rotation, or a quip expiring. */
-  private rotationWakeAt(): number | undefined {
+  private rotationWakeAt(nowMs: number): number | undefined {
     if (!this.config.phrases) return undefined
     if (this.pendingPhrase !== null) return this.pendingUntil
-    // Before the first render there is no rotation deadline yet: the render
-    // that sets `phraseChangedAt` also produces the phrase being displayed.
-    if (this.phraseChangedAt <= 0) return undefined
-    // Rare eggs linger longer than the ordinary pool.
-    const rare = this.previousPhrase !== undefined && this.isRarePhrase(this.previousPhrase)
-    return this.phraseChangedAt + (rare ? RARE_ROTATE_MS : PHRASE_ROTATE_MS)
+    // The next window boundary of the phase's own pool. Derived rather than
+    // remembered: a read must never be what advances the copy (see phraseForSlot).
+    const rotateMs = this.rarePool() ? RARE_ROTATE_MS : PHRASE_ROTATE_MS
+    return this.phraseAnchorAt() + (this.phraseSlot(nowMs, rotateMs) + 1) * rotateMs
   }
 
   /** When the currently displayed narration expires, if one is displayed. */
@@ -803,26 +794,12 @@ export class ActivityTracker {
     }
     if (this.config.phrases) {
       const pending = this.pendingPhraseAt(nowMs)
-      // Rare eggs linger longer (pi RARE_PHRASE_TICKS ≈ 7.5s).
-      const rotateMs = this.previousPhrase !== undefined && this.isRarePhrase(this.previousPhrase)
-        ? RARE_ROTATE_MS
-        : PHRASE_ROTATE_MS
-      if (pending !== null) {
-        this.previousPhrase = pending
-        this.phraseChangedAt = nowMs
-      } else if (nowMs - this.phraseChangedAt >= rotateMs) {
-        // Waiting (pre-first-token) draws from the waiting pool; thinking
-        // rotates the egg-aware lively pool (holiday / rare / weekend /
-        // night). Both pools are language-aware, so a `/lang` switch shows
-        // on the next rotation.
-        this.previousPhrase = this.phase === 'waiting'
-          ? waitingPhrase(this.previousPhrase)
-          : this.livelyPhrase(thinkingMs, nowMs)
-        this.phraseChangedAt = nowMs
-      }
-      const phrase = this.previousPhrase ?? (this.phase === 'waiting'
-        ? waitingPhrase()
-        : this.livelyPhrase(thinkingMs, nowMs))
+      // Waiting (pre-first-token) draws from the waiting pool; thinking draws
+      // the egg-aware lively pool (holiday / rare / weekend / night). The pool
+      // follows the CURRENT phase and the window follows the phase's own start,
+      // so neither the copy nor the cadence depends on how often this is read.
+      const rotateMs = this.rarePool() ? RARE_ROTATE_MS : PHRASE_ROTATE_MS
+      const phrase = pending ?? this.phraseForSlot(this.phraseSlot(nowMs, rotateMs), rotateMs)
       // The indicator animation (whale etc.) already signals activity, so the
       // pi DOT_FRAMES ellipsis breathing is dropped for the DSH line.
       const tps = this.tpsPrefix(nowMs)
@@ -847,35 +824,27 @@ export class ActivityTracker {
   }
 
   /**
-   * Pick the next thinking phrase with the pi extension's egg order:
-   * holiday (once per turn) → rare 1/150 (once per turn) → weekend greeting
-   * (once per turn) → elapsed-time tiers with night mixing. Every egg is
-   * gated by `config.features` (absent flags default to on).
+   * The live narration this tracker is currently showing, if any.
+   *
+   * A projection folds DURABLE events only, so a live host that also sees
+   * stream frames has to hand the frame-derived narration to the projected
+   * value separately (see `ActivityProjectionOptions.live`); this is that
+   * payload, and `undefined` means "nothing live to overlay".
    */
-  private livelyPhrase(thinkingMs: number, nowMs: number): string {
-    const features = this.config.features ?? {}
-    const now = new Date(nowMs)
-    if (features.holidays !== false && !this.holidayShown) {
-      const holiday = holidayPhrase(now)
-      if (holiday !== null) {
-        this.holidayShown = true
-        return holiday
-      }
-    }
-    if (features.rareEggs !== false && !this.rareShown && Math.random() < RARE_CHANCE) {
-      this.rareShown = true
-      return rarePhrase(this.previousPhrase)
-    }
-    if (features.weekend !== false && !this.weekendShown && isWeekend(now)) {
-      this.weekendShown = true
-      return weekendPhrase(this.previousPhrase)
-    }
-    return thinkingPhrase(
-      thinkingMs,
-      this.previousPhrase,
-      features.nightPhrases !== false && isNight(now.getHours()),
-      this.config.customPhrases,
-    )
+  liveNarration(): { readonly narration: string; readonly lastChunkAt: number } | undefined {
+    if (this.narratedText === null) return undefined
+    return { narration: this.narratedText, lastChunkAt: this.lastChunkAt }
+  }
+
+  /**
+   * Show `narration` as if it had just streamed in.
+   *
+   * Used by the live overlay: the projected state carries no frames, so the
+   * host paints the freshest narration it has over the folded value.
+   */
+  applyLiveNarration(narration: string, at: number): void {
+    this.narratedText = narration
+    this.lastChunkAt = at
   }
 
   /** The pending one-off quip (interrupt / model / compact / work reminder)
@@ -894,11 +863,6 @@ export class ActivityTracker {
       }
     }
     return null
-  }
-
-  /** Whether a phrase comes from the rare pool (longer display window). */
-  private isRarePhrase(phrase: string): boolean {
-    return RARE_PHRASES.includes(phrase) || EN_RARE_PHRASES.includes(phrase)
   }
 
   /** Estimated tokens/s while the stream is fresh (pi parity, opt-in). */
@@ -952,8 +916,83 @@ export class ActivityTracker {
   }
 
   private setPhase(phase: ActivityPhase, atMs: number): void {
+    // A phase change switches copy pools at once — the phrase is derived from
+    // the CURRENT phase, so nothing from the previous phase can linger.
+    if (phase === 'thinking' && this.phase !== 'thinking') this.thinkingPhases += 1
     this.phase = phase
     this.phaseStartedAt = atMs
+  }
+
+  /**
+   * The instant the current phrase's rotation window starts from.
+   *
+   * The phase's own start, so entering a phase immediately shows that phase's
+   * copy; a phase still needs a turn to belong to, hence the fallback.
+   */
+  private phraseAnchorAt(): number {
+    return this.phaseStartedAt > 0 ? this.phaseStartedAt : this.turnStartedAt
+  }
+
+  /** The rotation window index of the current phase at `nowMs`. */
+  private phraseSlot(nowMs: number, rotateMs: number): number {
+    return Math.max(0, Math.floor((nowMs - this.phraseAnchorAt()) / rotateMs))
+  }
+
+  /**
+   * Whether this phase draws from the rare pool.
+   *
+   * Once per turn, in the turn's FIRST thinking phase, decided by the seed — a
+   * per-read dice roll would pop an egg in and out of the line (the egg's own
+   * display window then lasts for the whole phase).
+   */
+  private rarePool(): boolean {
+    const features = this.config.features ?? {}
+    if (features.rareEggs === false) return false
+    if (this.phase !== 'thinking' || this.thinkingPhases !== 1) return false
+    return mixSlot(this.turnStartedAt, 0x5EED) % Math.round(1 / RARE_CHANCE) === 0
+  }
+
+  /**
+   * The phrase for one rotation window — a PURE function of the state and `nowMs`.
+   *
+   * This used to be stateful (`previousPhrase` + `phraseChangedAt` mutated on
+   * render). That works for a long-lived in-process tracker, but a projected
+   * value is read far more often than it is written: the read renders a
+   * throwaway copy, so every read rolled a new phrase (measured: three different
+   * phrases in three consecutive 500 ms reads) and a phase change could carry the
+   * previous phase's pool in. Deriving from (phase, phase start, seed, slot)
+   * makes a read idempotent and keeps the pools apart by construction.
+   */
+  private phraseForSlot(slot: number, rotateMs: number): string {
+    const at: PhraseSlot = { seed: this.turnStartedAt, slot }
+    const features = this.config.features ?? {}
+    const now = new Date(this.now())
+    if (this.phase === 'waiting') return waitingPhrase(undefined, at)
+    // Eggs belong to the turn's first thinking window — the waiting phase is
+    // usually over before a window elapses, so a greeting shown there would
+    // flash by. Order matches the pi extension: holiday → rare → weekend, and
+    // "first thinking phase, first window" is what makes them once per turn.
+    if (this.thinkingPhases === 1 && slot === 0) {
+      if (features.holidays !== false) {
+        const holiday = holidayPhrase(now, at)
+        if (holiday !== null) return holiday
+      }
+      if (this.rarePool()) return rarePhrase(undefined, at)
+      if (features.weekend !== false && isWeekend(now)) return weekendPhrase(undefined, at)
+    }
+    if (this.rarePool()) return rarePhrase(undefined, at)
+    // The long-thinking tiers are chosen at the WINDOW's start, not at the
+    // instant of the read: a tier boundary crossed mid-window would otherwise
+    // swap the copy seconds into a window the reader is still on.
+    const windowStart = this.phraseAnchorAt() + slot * rotateMs
+    const thinkingAtWindowStart = Math.max(0, windowStart - this.thinkingStartedAt)
+    return thinkingPhrase(
+      this.thinkingStartedAt === 0 ? this.thinkingMs : thinkingAtWindowStart,
+      undefined,
+      features.nightPhrases !== false && isNight(now.getHours()),
+      this.config.customPhrases,
+      at,
+    )
   }
 }
 
@@ -979,10 +1018,16 @@ function secondBoundary(from: number, nowMs: number): number {
   return from + (Math.floor(elapsed / 1000) + 1) * 1000
 }
 
-/** Rotate the thinking phrase every N render ticks (render cadence ≈ 500ms → ~4s). */
-const PHRASE_ROTATE_MS = 4000
-/** Rare easter-egg phrases linger this long before rotation (pi ≈ 7.5s). */
-const RARE_ROTATE_MS = 7500
+/**
+ * How long one phrase stays on screen.
+ *
+ * Long enough to actually read: the pi extension rotated every ~4 s, which
+ * reads as flicker next to a live transcript (and the window is now derived
+ * from the phase's clock, so this is exactly what a reader sees).
+ */
+const PHRASE_ROTATE_MS = 9000
+/** Rare easter-egg phrases linger longer, since they are a one-off per turn. */
+const RARE_ROTATE_MS = 15000
 /** One-off quips (interrupt / model / compact) display window. */
 const PENDING_MS = 6000
 /** Tools closer than this count as one combo streak. */

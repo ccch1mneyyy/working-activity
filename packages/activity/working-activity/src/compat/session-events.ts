@@ -87,7 +87,13 @@ export function toActivityEvents(event: SessionEvent): readonly ActivityEvent[] 
     case 'assistant/message': {
       const usage = event.data.usage
       const normalized = usage === undefined ? undefined : normalizeUsage(usage)
-      return [{ kind: 'assistant-settled', at: event.time, ...(normalized === undefined ? {} : { usage: normalized }) }]
+      const text = settledText(event.data.message)
+      return [{
+        kind: 'assistant-settled',
+        at: event.time,
+        ...(normalized === undefined ? {} : { usage: normalized }),
+        ...(text === '' ? {} : { text }),
+      }]
     }
     case 'tool/call':
       return [{
@@ -140,4 +146,27 @@ function normalizeUsage(usage: {
     ...(usage.cacheReadTokens === undefined ? {} : { cacheReadTokens: usage.cacheReadTokens }),
     ...(usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: usage.cacheWriteTokens }),
   }
+}
+
+/**
+ * The text of a settled assistant message, concatenated from its text blocks.
+ *
+ * Structural readers only: the message shape is host data, and a message with a
+ * different shape yields '' rather than throwing (the tracker then simply has no
+ * narration for it).
+ * @param message - The event's message payload, of unknown shape.
+ * @returns the message text, or '' when it carries none.
+ */
+function settledText(message: unknown): string {
+  if (message === null || typeof message !== 'object') return ''
+  const content = (message as { content?: unknown }).content
+  if (!Array.isArray(content)) return ''
+  let text = ''
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') continue
+    const record = block as { type?: unknown; text?: unknown }
+    if (record.type !== 'text' || typeof record.text !== 'string') continue
+    text += record.text
+  }
+  return text
 }

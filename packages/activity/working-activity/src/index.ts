@@ -25,7 +25,7 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import { ActivityTracker } from './status.js'
 import type { TrackerConfig } from './status.js'
 import { feedStreamFrame } from './compat/assistant-stream.js'
-import { createActivityProjection } from './projection.js'
+import { createActivityProjection, ACTIVITY_PROJECTION_KEY } from './projection.js'
 import { registerActivityEventType } from './registration.js'
 import { langNow, setLangOverride, t } from './lang.js'
 import { DEFAULT_PRESET } from './frames.js'
@@ -220,15 +220,39 @@ export function apply(ctx: Context, config: Config = {}): void {
   // after it is mounted, hence `inject`. One definition serves both host
   // contract shapes — see src/projection.ts for why that is a dual-spelling
   // object rather than a version probe.
+  //
+  // The live narration overlay is keyed by the projection's own state object:
+  // `stateOf` is the only way back from a session to the state a read will see,
+  // and it exists on the current line but not on the rc.6-era registry — there
+  // the overlay stays empty and settled-message narration carries the line.
+  const liveNarration = new WeakMap<object, { narration: string; lastChunkAt: number }>()
+  /** The registry, once injected: `stateOf` is how the overlay finds its state. */
+  let projectionService: { stateOf?: (session: Session, key: string) => unknown } | undefined
+
+  /** Publish the tracker's current narration for the projected value to overlay. */
+  const noteLiveNarration = (session: Session, tracker: ActivityTracker): void => {
+    const state = projectionService?.stateOf?.(session, ACTIVITY_PROJECTION_KEY)
+    if (state === null || typeof state !== 'object') return
+    const narration = tracker.liveNarration()
+    if (narration === undefined) return
+    liveNarration.set(state, narration)
+  }
+
   ctx.inject(['sessionProjections'] as never, ((projectionCtx: Context) => {
     const registry = (projectionCtx as unknown as {
-      sessionProjections?: { register(definition: unknown): () => void }
+      sessionProjections?: {
+        register(definition: unknown): () => void
+        /** Present on the current line; the rc.6-era registry has no state read. */
+        stateOf?: (session: Session, key: string) => unknown
+      }
     }).sessionProjections
     if (registry === undefined) return
+    projectionService = registry
     registry.register(createActivityProjection({
       trackerConfig,
       customActions: resolved.customActions,
       lang: langNow,
+      live: state => (state !== null && typeof state === 'object' ? liveNarration.get(state) : undefined),
     }))
   }) as never)
 
@@ -349,6 +373,10 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.on('agent/assistant-stream' as never, (({ agent, frame }: { agent: Agent; frame: unknown }) => {
     const runtime = runtimeFor(agent.session)
     feedStreamFrame(runtime.tracker, agent, frame)
+    // Hand the freshest narration to the projected value as well: a projection
+    // folds committed events only, so without this overlay the line a client
+    // reads would never carry the model's own `⏵` words (see src/projection.ts).
+    noteLiveNarration(agent.session, runtime.tracker)
     feed(runtime, runtime.tracker.render())
   }) as never)
 

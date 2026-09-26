@@ -51,8 +51,20 @@ export type ActivityEvent =
   }
   /** Drop provisional stream state for the attempt that just ended. */
   | { readonly kind: 'stream-reset'; readonly at: number; readonly reason: ActivityStreamResetReason }
-  /** One assistant message settled with authoritative usage. */
-  | { readonly kind: 'assistant-settled'; readonly at: number; readonly usage?: ActivityUsage }
+  /** One assistant message settled with authoritative usage (and its text). */
+  | {
+    readonly kind: 'assistant-settled'
+    readonly at: number
+    readonly usage?: ActivityUsage
+    /**
+     * The settled message's text, when it has any.
+     *
+     * Live narration arrives on stream frames, which only a live host sees; a
+     * projection (or a replayed log) folds durable events alone, so the same
+     * `⏵` line must be recoverable from the message that carries it.
+     */
+    readonly text?: string
+  }
   /** A tool started running. */
   | {
     readonly kind: 'tool-start'

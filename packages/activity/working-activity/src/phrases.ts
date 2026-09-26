@@ -24,6 +24,49 @@ export function pickPhrase(entries: PhrasePool, previous?: string): string {
   return next
 }
 
+/** A rotation window: the turn's seed, and which window of it. */
+export interface PhraseSlot {
+  readonly seed: number
+  readonly slot: number
+}
+
+/**
+ * Deterministic 32-bit mix of a seed and a window index (avalanche, then mask).
+ *
+ * The point is reproducibility, not cryptography: the same inputs must always
+ * produce the same value, so a reader may re-derive a phrase as often as it
+ * likes without the copy moving under it.
+ */
+export function mixSlot(seed: number, slot: number): number {
+  let h = (Math.imul(seed | 0, 0x9E3779B1) ^ Math.imul(slot | 0, 0x85EBCA6B)) >>> 0
+  h = Math.imul(h ^ (h >>> 15), 0x2545F491) >>> 0
+  h = Math.imul(h ^ (h >>> 13), 0x9E3779B1) >>> 0
+  return (h ^ (h >>> 16)) >>> 0
+}
+
+/**
+ * Deterministic sibling of {@link pickPhrase}.
+ *
+ * The projected line is READ far more often than it is written — a client ticks
+ * it, the host validates it, a checkpoint may re-render it — so picking at
+ * random inside a read makes the copy churn on every read (measured: three
+ * different phrases across three consecutive 500 ms reads). This picks by
+ * position instead: one phrase per window, always the same phrase for the same
+ * window, and adjacent windows differ.
+ * @param entries - The pool to draw from.
+ * @param seed - Per-turn seed (the turn's start time), so turns differ.
+ * @param slot - Rotation window index within the phase.
+ */
+export function pickPhraseAt(entries: PhrasePool, seed: number, slot: number): string {
+  if (entries.length === 0) throw new Error('pickPhraseAt() requires a non-empty pool')
+  return entries[mixSlot(seed, slot) % entries.length] as string
+}
+
+/** Draw from `entries`: deterministic when a slot is given, random otherwise. */
+function draw(entries: PhrasePool, previous: string | undefined, at: PhraseSlot | undefined): string {
+  return at === undefined ? pickPhrase(entries, previous) : pickPhraseAt(entries, at.seed, at.slot)
+}
+
 // ── zh pools (original copy) ─────────────────────────────────────────────
 
 /** Thinking phrases while the model works without a tool. */
@@ -383,26 +426,26 @@ export const EN_MODEL_QUIPS: Readonly<Record<string, readonly string[]>> = {
 }
 
 /** Detect a holiday for `date`, Lunar New Year first. */
-export function holidayPhrase(date: Date): string | null {
+export function holidayPhrase(date: Date, at?: PhraseSlot): string | null {
   const mmdd = `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
   const ymd = `${date.getFullYear()}-${mmdd}`
   const en = langNow() === 'en'
   if (LUNAR_NEW_YEAR_DAYS[ymd] === true) {
-    return pickPhrase(en ? EN_LUNAR_NEW_YEAR_PHRASES : LUNAR_NEW_YEAR_PHRASES)
+    return draw(en ? EN_LUNAR_NEW_YEAR_PHRASES : LUNAR_NEW_YEAR_PHRASES, undefined, at)
   }
   const pool = en ? EN_HOLIDAY_PHRASES[mmdd] : HOLIDAY_PHRASES[mmdd]
-  if (pool !== undefined) return pickPhrase(pool)
+  if (pool !== undefined) return draw(pool, undefined, at)
   return null
 }
 
 /** Pick a rare easter-egg phrase in the active language. */
-export function rarePhrase(previous?: string): string {
-  return pickPhrase(langNow() === 'en' ? EN_RARE_PHRASES : RARE_PHRASES, previous)
+export function rarePhrase(previous?: string, at?: PhraseSlot): string {
+  return draw(langNow() === 'en' ? EN_RARE_PHRASES : RARE_PHRASES, previous, at)
 }
 
 /** Pick a weekend greeting in the active language. */
-export function weekendPhrase(previous?: string): string {
-  return pickPhrase(langNow() === 'en' ? EN_WEEKEND_PHRASES : WEEKEND_PHRASES, previous)
+export function weekendPhrase(previous?: string, at?: PhraseSlot): string {
+  return draw(langNow() === 'en' ? EN_WEEKEND_PHRASES : WEEKEND_PHRASES, previous, at)
 }
 
 /** Pick a post-interruption phrase in the active language. */
@@ -508,7 +551,7 @@ export function waitingPool(): readonly string[] {
  * @param night - Mix night-owl copy into the pool.
  * @param extra - User custom phrases appended to the base (non-tier) pool.
  */
-export function thinkingPhrase(elapsedMs: number, previous?: string, night = false, extra?: readonly string[]): string {
+export function thinkingPhrase(elapsedMs: number, previous?: string, night = false, extra?: readonly string[], at?: PhraseSlot): string {
   let pool: readonly string[] = langNow() === 'en' ? EN_THINKING_PHRASES : THINKING_PHRASES
   for (const tier of thinkingPools()) {
     if (elapsedMs >= tier.atMs) {
@@ -523,14 +566,14 @@ export function thinkingPhrase(elapsedMs: number, previous?: string, night = fal
   }
   if (night && pool === (langNow() === 'en' ? EN_THINKING_PHRASES : THINKING_PHRASES)) {
     const nightPool = langNow() === 'en' ? EN_NIGHT_PHRASES : NIGHT_PHRASES
-    return pickPhrase([...pool, ...nightPool], previous)
+    return draw([...pool, ...nightPool], previous, at)
   }
-  return pickPhrase(pool, previous)
+  return draw(pool, previous, at)
 }
 
 /** Pick a waiting phrase in the active language. */
-export function waitingPhrase(previous?: string): string {
-  return pickPhrase(waitingPool(), previous)
+export function waitingPhrase(previous?: string, at?: PhraseSlot): string {
+  return draw(waitingPool(), previous, at)
 }
 
 /** Pick a tool-failure phrase in the active language. */

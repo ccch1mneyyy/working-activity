@@ -368,6 +368,41 @@ describe('DSH 0.1.7-rc.2 compatibility', () => {
     }
   })
 
+  it('carries the model self-narration into the projected value', async () => {
+    // The reported symptom this pins: with the line driven by a projection, the
+    // model's own `⏵` words disappeared. Narration is streamed, and a projection
+    // folds committed events only, so the plugin hands the live line over per
+    // read (and settled messages carry the durable half).
+    const ctx = new Context()
+    let activityFiber: Fiber | undefined
+    try {
+      await mountHost(ctx)
+      activityFiber = await ctx.plugin(WorkingActivity, { publish: false, lang: 'zh' })
+      const lines: string[] = []
+      const off = ctx.sessionProjections.onChanged((_session, key, value) => {
+        if (String(key) !== 'workingActivity') return
+        const line = (value as { line?: unknown }).line
+        if (typeof line === 'string') lines.push(line)
+      })
+      scriptNarratedTurn(ctx)
+      const agent = await runToolTurn(ctx, 'rc2-narration', 'fix the login page')
+      off()
+
+      const snapshot = ctx.sessionProjections.snapshot(agent.session)
+      const values = (snapshot as unknown as { values: Record<string, Record<string, unknown>> }).values
+      const pushedNarration = lines.filter(line => line.includes('⏵'))
+      console.log(`[rc2 narration] values pushed: ${lines.length}, narrated: ${pushedNarration.length}`)
+      console.log(`[rc2 narration] first narrated push: ${JSON.stringify(pushedNarration[0] ?? null)}`)
+
+      // The live path: the change feed a client lives on must carry the line.
+      expect(pushedNarration.length).toBeGreaterThan(0)
+      expect(pushedNarration[0]).toContain(NARRATION)
+    } finally {
+      await activityFiber?.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
   // ---------------------------------------------------------------------------
   // Host seams the plugin mounts through: none of them may throw or go silent.
   // ---------------------------------------------------------------------------

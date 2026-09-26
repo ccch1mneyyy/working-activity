@@ -121,6 +121,14 @@ const viewSchema = z.object({
   lang: z.enum(['zh', 'en']),
 })
 
+/** What a live host can overlay onto the folded value. */
+export interface LiveActivityOverlay {
+  /** The `⏵` narration most recently streamed for this session. */
+  readonly narration: string
+  /** When that narration arrived (its freshness clock). */
+  readonly lastChunkAt: number
+}
+
 /** Knobs a projection needs; all of them are also plugin configuration. */
 export interface ActivityProjectionOptions {
   /** Behavioral knobs of the tracker to fold with. */
@@ -131,6 +139,17 @@ export interface ActivityProjectionOptions {
   readonly now?: () => number
   /** Live UI language tag, so clients render in the same language. */
   readonly lang: () => Lang
+  /**
+   * Live narration for one folded state, when the host has any.
+   *
+   * The narration is streamed, and a projection only folds committed events, so
+   * without this the projected line would never show the model's own words. The
+   * host keeps the frames and hands the freshest line over per read; the value
+   * still derives everything else from the log. Corridors whose registry has no
+   * `stateOf` (rc.6) simply never call this and fall back to the narration that
+   * settled messages carry.
+   */
+  readonly live?: (state: unknown) => LiveActivityOverlay | undefined
 }
 
 /**
@@ -168,12 +187,19 @@ export function createActivityProjection(options: ActivityProjectionOptions): {
     // One clock read for the whole value: rendering and deriving the turn's
     // start instant from the rendered elapsed must agree exactly.
     const at = now()
-    const rendered = restore(state).render(at)
-    const live = rendered.phase !== 'idle' && rendered.phase !== 'done'
+    const tracker = restore(state)
+    // A projection folds durable events, but the `⏵` self-narration is born on
+    // live stream frames. The host that owns those frames overlays the freshest
+    // one here, so the value keeps the live narration without writing anything
+    // to the session log.
+    const live = options.live?.(state)
+    if (live !== undefined) tracker.applyLiveNarration(live.narration, live.lastChunkAt)
+    const rendered = tracker.render(at)
+    const running = rendered.phase !== 'idle' && rendered.phase !== 'done'
     return {
       phase: rendered.phase,
       line: rendered.line,
-      live,
+      live: running,
       ...(rendered.label === undefined ? {} : { label: rendered.label }),
       ...(rendered.detail === undefined ? {} : { detail: rendered.detail }),
       ...(rendered.phrase === undefined ? {} : { phrase: rendered.phrase }),
