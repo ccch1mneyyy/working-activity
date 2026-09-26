@@ -28,8 +28,8 @@ plugins:
 ```
 
 Host 与 TUI 集成支持 DSH `0.1.0-rc.6`、`0.1.1-rc` 版本线和
-`0.1.2-alpha.2`。可选 Web 客户端仍使用 rc 版 client-runtime 契约，不在
-alpha.2 兼容范围内。
+`0.1.2-alpha.2`。可选 Web 客户端面向当前客户端编队（`0.1.7-rc.2`，session
+projection），不在 alpha.2 兼容范围内。
 
 ## TUI 用法
 
@@ -50,12 +50,15 @@ plugins:
 
 ## Web 用法
 
-Web 客户端通过 `activity/status` 事件以两种方式渲染实时状态行：
+Web 半边只有一个条目——挂 `conversation.input.dock` 的 `WorkingLine`——渲染成 composer 卡片上方的一行暗色状态（相位色标记、宿主写好的整行文案、本回合工具数）。首个值到达之前、以及相位为 `idle` 时渲染空。
 
-- 回合级状态标签（`TurnStatus`，原先是静态的 "Deep diving..."）：回合进行中显示实时状态行，保留原有的流光扫过特效。
-- 输入区上方的状态行条目（`WorkingLine`，挂在 `conversation.input.dock`）：回合结束后渲染收工统计（token/耗时/工具摘要）；活动阶段只在轮辑标签上显示。
+**通道是 session projection，不是会话日志。** node 半边把每个已提交的会话事件折叠成 `workingActivity` 投影值，宿主把整个值（相位、`line`、工具数、时间戳）经 projection store 下发给客户端；浏览器用 session 标准 kit 的 `useProjection('workingActivity')` 读取。由此有三条推论：
 
-插件缺席时两者都回退到原来的静态标签，禁用插件不影响 Web UI。
+- **不为 Web UI 往会话日志写任何东西**：不需要 `publish: true` 的会话，也不会因为本包让日志变得无法 resume。
+- **runtime 补丁已退役。** 早期版本要求打过补丁的 `@deepseek-ai/dsh-client-runtime`（把 `activity/status` 事件搬到 `ConversationSnapshot.activity`）。该包冻结在 `0.1.1-rc.2`，且不在当前宿主线（`0.1.7-rc.2`）里；本包不再声明它，`ConversationSnapshot.activity` 那段声明合并也已删除。projection 是唯一通道。
+- **秒数按事件刷新。** `line` 按宿主在最后一次折叠时渲染的原文上屏，所以长工具跑着时那截 `· 12s` 可能滞后到下一个已提交事件；客户端本地滴答是已知后续项（值里带了 `phaseStartedAt` / `turnStartedAt` 备用）。
+
+该条目显式声明它真正用到的客户端编队——在 `peerDependencies` 与 `dsh.client.inject` 两处：`@deepseek-ai/dsh-client-ui-slots`（槽位契约）、`@deepseek-ai/dsh-client-ui-conversation`（dock 座位）、`@deepseek-ai/dsh-client-ui-session`（提供 `useProjection` 的 session 标准 kit）、`@deepseek-ai/dsh-client-ui-renderer`（注册所经的 `slots` 服务）、`@deepseek-ai/dsh-session-projection`（投影键的类型表）。五个都是 optional peer，没有 Web 组合的 profile 不受影响。
 
 ## 配置
 
@@ -114,4 +117,4 @@ Web 客户端通过 `activity/status` 事件以两种方式渲染实时状态行
 - **自述可选**：`⏵` 模型自述约定（每次回复顶部写一行短状态文案）默认注入（`narrate: true`）；设 `narrate: false` 则只由事件推导。
 - **无进度百分比**：DSH 没有工具进度事件；长工具只显示已耗时。
 - **无动画帧**：TUI 槽位渲染静态文本片段；帧动画（moon/comet/braille 预设）要等 prompt 槽位契约支持帧回调后再做。
-- **Web 双入口重复显示**：输入区 `WorkingLine` 与聊天区 `TurnStatus` 显示同一快照；dock 条目用于回合标签不可见的会话视图。
+- **Web 端秒数按事件刷新**：dock 条目按宿主折叠出的 `line` 原文上屏，所以长工具跑着时那截秒数可能滞后到下一个已提交事件；基于 `phaseStartedAt` / `turnStartedAt` 的客户端本地滴答是已知后续项。
