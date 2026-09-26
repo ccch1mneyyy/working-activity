@@ -34,8 +34,8 @@ afterEach(() => setLangOverride('auto'))
 const CONFIG: TrackerConfig = { phrases: true, detailLimit: 40, showIdle: false }
 /** Ordinary weekday noon: no holiday, no weekend egg. */
 const START = new Date('2026-03-16T12:00:00').getTime()
-/** The rotation window the tracker promises (kept in sync by the test below). */
-const WINDOW_MS = 9000
+/** The rotation window the tracker promises (the pi cadence, 4 s). */
+const WINDOW_MS = 4000
 
 /** A tracker whose state can be read the way a projection reads it. */
 function harness(): {

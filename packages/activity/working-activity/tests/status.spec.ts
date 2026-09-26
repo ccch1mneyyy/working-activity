@@ -301,11 +301,12 @@ describe('ActivityTracker easter eggs', () => {
     const second = tracker.render()
     expect(NEW_YEAR_POOL).not.toContain(second.phrase)
 
-    // A new turn can roll the egg again (advance past the rotation window).
+    // A new turn can show the egg again: eggs belong to the turn's FIRST
+    // thinking window, so this one has to be read inside that window.
     clock.advance(1000)
     tracker.onSessionEvent(turnStart(clock.now()))
     tracker.onSessionEvent(reasoningDelta(clock.now()))
-    clock.advance(5000)
+    clock.advance(500)
     expect(NEW_YEAR_POOL).toContain(tracker.render().phrase)
   })
 

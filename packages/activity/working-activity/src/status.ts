@@ -1021,13 +1021,14 @@ function secondBoundary(from: number, nowMs: number): number {
 /**
  * How long one phrase stays on screen.
  *
- * Long enough to actually read: the pi extension rotated every ~4 s, which
- * reads as flicker next to a live transcript (and the window is now derived
- * from the phase's clock, so this is exactly what a reader sees).
+ * This is the pi extension's cadence, unchanged: the copy was never rotating
+ * too fast — it was being re-rolled on every read (see phraseForSlot), which is
+ * what read as flicker. With the read made pure, one phrase per window is
+ * exactly what a reader sees, and 4 s is the pace that felt right.
  */
-const PHRASE_ROTATE_MS = 9000
+const PHRASE_ROTATE_MS = 4000
 /** Rare easter-egg phrases linger longer, since they are a one-off per turn. */
-const RARE_ROTATE_MS = 15000
+const RARE_ROTATE_MS = 7500
 /** One-off quips (interrupt / model / compact) display window. */
 const PENDING_MS = 6000
 /** Tools closer than this count as one combo streak. */
