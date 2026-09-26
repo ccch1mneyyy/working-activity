@@ -74,6 +74,9 @@ let override: Lang | 'auto' = 'auto'
 /** Force (or release) the active language; `auto` re-enables the chain. */
 export function setLangOverride(lang: Lang | 'auto'): void {
   override = lang
+  // Releasing (or re-setting) the pin decides the language from the file again,
+  // and an explicit switch must not wait out the probe TTL.
+  invalidateLangCache()
 }
 
 /** The currently active language. */
@@ -99,15 +102,36 @@ export function isLang(value: unknown): value is Lang {
 }
 
 /**
- * Read the persisted dsh-tui language choice, mtime-cached so the per-tick
- * status render never re-reads an unchanged file. `undefined` when the file
- * is absent or holds no valid `{ lang }` value.
+ * How long one filesystem probe is trusted. Long enough that a 500 ms status
+ * render does not stat the file on every translation, short enough that a
+ * `/lang` switch written by the UI still lands within a second.
  */
-export function readLangFile(): Lang | undefined {
+const LANG_FILE_PROBE_TTL_MS = 1000
+
+/**
+ * Read the persisted dsh-tui language choice.
+ *
+ * The probe is cached twice over: the parsed value is reused while the file's
+ * mtime is unchanged, and even the `statSync` itself is skipped for
+ * {@link LANG_FILE_PROBE_TTL_MS}. Both halves matter — one render translates
+ * several keys, and a host that never wrote the file would otherwise pay a
+ * FAILED stat on every one of them (issue #14).
+ *
+ * @param nowMs - Instant to measure the probe cache against.
+ * @returns the persisted language, or `undefined` when the file is absent or
+ * holds no valid `{ lang }` value.
+ */
+export function readLangFile(nowMs: number = Date.now()): Lang | undefined {
+  if (lastProbeAt !== 0 && nowMs - lastProbeAt < LANG_FILE_PROBE_TTL_MS) return cachedLang
+  lastProbeAt = nowMs
   let mtimeMs: number
   try {
     mtimeMs = statSync(LANG_FILE).mtimeMs
   } catch {
+    // Absence is cached like any other answer: the common case on a host that
+    // never ran the UI's language picker.
+    cachedMtime = -1
+    cachedLang = undefined
     return undefined
   }
   if (cachedMtime === mtimeMs) return cachedLang
@@ -124,8 +148,21 @@ export function readLangFile(): Lang | undefined {
   return cachedLang
 }
 
+/**
+ * Drop the file cache so the next read probes the filesystem immediately.
+ * Called whenever the language is pinned explicitly, so a switch is never
+ * delayed by the probe TTL.
+ */
+export function invalidateLangCache(): void {
+  lastProbeAt = 0
+  cachedMtime = -1
+  cachedLang = undefined
+}
+
 let cachedMtime = -1
 let cachedLang: Lang | undefined
+/** When the file was last probed; `0` means "never probed in this process". */
+let lastProbeAt = 0
 
 /**
  * Guess the language from the OS locale (`LC_ALL`, `LC_MESSAGES`, `LANG`),

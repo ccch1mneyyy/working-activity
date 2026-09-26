@@ -155,11 +155,32 @@ export function apply(ctx: Context, config: Config = {}): void {
   // dispose restores `auto` for any other composition in the process.
   setLangOverride(resolved.lang)
   ctx.effect(() => () => setLangOverride('auto'), 'working-activity lang override')
-  const trackers = new Map<Session, ActivityTracker>()
-  let activeSession: Session | undefined
-  let lastPublishedLine: string | undefined
-  let lastPublishedPhase: string | undefined
-  let lastPublishAt = 0
+  /**
+   * One session's live activity state.
+   *
+   * Every session owns its tracker, its pending wake-up and its publish
+   * throttle. A single shared "active session" made the line of a session that
+   * stopped emitting events freeze entirely (only the last session to emit was
+   * ever redrawn), and made two concurrent sessions — a background session and
+   * the one on screen, say — consume each other's throttle state.
+   */
+  interface SessionRuntime {
+    readonly session: Session
+    readonly tracker: ActivityTracker
+    timer?: NodeJS.Timeout
+    lastPublishedLine?: string
+    lastPublishedPhase?: string
+    lastPublishAt: number
+  }
+
+  const runtimes = new Map<Session, SessionRuntime>()
+  /**
+   * The session whose line currently owns the single TUI prompt slot. The slot
+   * is one global seat with no notion of a foreground session, so the
+   * most-recently-active session keeps it; the per-session event log above is
+   * unaffected by this choice.
+   */
+  let slotSession: Session | undefined
 
   // Optional TUI seam: no TUI composed -> no slot, no error. The register()
   // call is itself effect-owned, so fiber disposal unregisters the slot.
@@ -181,46 +202,92 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
   }
 
-  const trackerFor = (session: Session): ActivityTracker => {
-    let tracker = trackers.get(session)
-    if (tracker === undefined) {
-      tracker = new ActivityTracker(
-        {
-          phrases: resolved.phrases,
-          detailLimit: resolved.detailLimit,
-          showIdle: false,
-          features: resolved.features,
-          customPhrases: resolved.customPhrases,
-          showTokPerSec: resolved.showTokPerSec,
-          workRemindAt: resolved.workRemindAt,
-        },
-        Date.now,
-        resolved.customActions,
-      )
-      trackers.set(session, tracker)
+  const runtimeFor = (session: Session): SessionRuntime => {
+    let runtime = runtimes.get(session)
+    if (runtime === undefined) {
+      runtime = {
+        session,
+        tracker: new ActivityTracker(
+          {
+            phrases: resolved.phrases,
+            detailLimit: resolved.detailLimit,
+            showIdle: false,
+            features: resolved.features,
+            customPhrases: resolved.customPhrases,
+            showTokPerSec: resolved.showTokPerSec,
+            workRemindAt: resolved.workRemindAt,
+          },
+          Date.now,
+          resolved.customActions,
+        ),
+        lastPublishAt: 0,
+      }
+      runtimes.set(session, runtime)
     }
-    return tracker
+    return runtime
+  }
+
+  /** Stop one runtime's pending wake-up. */
+  const stopTimer = (runtime: SessionRuntime): void => {
+    if (runtime.timer === undefined) return
+    clearTimeout(runtime.timer)
+    runtime.timer = undefined
   }
 
   /**
-   * Publish one rendered snapshot: TUI slot update + throttled session event.
-   * Callers snapshot the tracker state at event time and hand it here, so a
-   * burst of fast events (e.g. a synchronous tool call+result) cannot lose an
-   * intermediate phase; the append itself runs inside a microtask because the
-   * session's appending guard is still set while session/event callbacks run.
+   * Arm the next redraw, if this line has one coming.
+   *
+   * The tracker knows when its own line can next change (`nextWakeAt`), so an
+   * idle or settled line arms nothing at all — the idle CPU of a permanent
+   * 500 ms interval is what issue #14 reported. Live phases are additionally
+   * capped at the configured tick so a wrong estimate can only make the line
+   * fresher, never staler.
    */
-  const publish = (session: Session, state: ActivityState): void => {
+  const armTimer = (runtime: SessionRuntime): void => {
+    stopTimer(runtime)
+    const nowMs = Date.now()
+    const wakeAt = runtime.tracker.nextWakeAt(nowMs)
+    if (wakeAt === undefined) return
+    const phase = runtime.tracker.render(nowMs).phase
+    const live = phase !== 'idle' && phase !== 'done'
+    const delayMs = Math.max(0, live ? Math.min(wakeAt - nowMs, resolved.tickMs) : wakeAt - nowMs)
+    runtime.timer = setTimeout(() => {
+      runtime.timer = undefined
+      publish(runtime, runtime.tracker.render())
+      armTimer(runtime)
+    }, delayMs)
+    // A status line must never be the reason a process stays alive.
+    runtime.timer.unref()
+  }
+
+  /**
+   * Feed one runtime and republish. Callers snapshot the tracker state at event
+   * time and hand it here, so a burst of fast events (e.g. a synchronous tool
+   * call+result) cannot lose an intermediate phase; the append itself runs
+   * inside a microtask because the session's appending guard is still set while
+   * session/event callbacks run.
+   */
+  const feed = (runtime: SessionRuntime, state: ActivityState): void => {
+    slotSession = runtime.session
+    publish(runtime, state)
+    // A pending wake-up will refresh the line soon enough; re-arming on every
+    // streamed token would churn timers at the token rate.
+    if (runtime.timer === undefined) armTimer(runtime)
+  }
+
+  /** Publish one rendered snapshot: TUI slot update + throttled session event. */
+  const publish = (runtime: SessionRuntime, state: ActivityState): void => {
     queueMicrotask(() => {
       const line = state.phase === 'idle' ? undefined : state.line
-      promptHandle?.set(line)
+      if (runtime.session === slotSession) promptHandle?.set(line)
       if (!resolved.publish) return
       const nowMs = Date.now()
-      const lineChanged = state.line !== lastPublishedLine
-      const phaseChanged = state.phase !== lastPublishedPhase
+      const lineChanged = state.line !== runtime.lastPublishedLine
+      const phaseChanged = state.phase !== runtime.lastPublishedPhase
       // Live phases republish on a throttle so elapsed times stay current;
       // settled phases (idle/done) publish only when the line itself changes.
       const liveThrottle = state.phase !== 'idle' && state.phase !== 'done'
-        && nowMs - lastPublishAt >= resolved.publishIntervalMs
+        && nowMs - runtime.lastPublishAt >= resolved.publishIntervalMs
       if (!lineChanged && !phaseChanged && !liveThrottle) return
       // Optional fields must be omitted (not undefined): session append rejects
       // data JSON would discard, and `activity/status` is a lossless-JSON event.
@@ -235,22 +302,21 @@ export function apply(ctx: Context, config: Config = {}): void {
         ...(state.phrase === undefined ? {} : { phrase: state.phrase }),
       }
       try {
-        session.append('activity/status', payload)
-        lastPublishedLine = state.line
-        lastPublishedPhase = state.phase
-        lastPublishAt = nowMs
+        runtime.session.append('activity/status', payload)
+        runtime.lastPublishedLine = state.line
+        runtime.lastPublishedPhase = state.phase
+        runtime.lastPublishAt = nowMs
       } catch {
         // Session closed or the append guard still held: drop this snapshot;
-        // the next tick retries the same line.
+        // the next wake retries the same line.
       }
     })
   }
 
   ctx.on('session/event', (session, event) => {
-    const tracker = trackerFor(session)
-    tracker.onSessionEvent(event)
-    activeSession = session
-    publish(session, tracker.render())
+    const runtime = runtimeFor(session)
+    runtime.tracker.onSessionEvent(event)
+    feed(runtime, runtime.tracker.render())
   })
 
   // Live model output. On the current host line the durable `assistant/chunk`
@@ -263,34 +329,28 @@ export function apply(ctx: Context, config: Config = {}): void {
   // The cursor that orders frames lives with the emitting agent, so a replaced
   // agent (whose revision restarts at 1) is never mistaken for a stale one.
   ctx.on('agent/assistant-stream' as never, (({ agent, frame }: { agent: Agent; frame: unknown }) => {
-    const session = agent.session
-    const tracker = trackerFor(session)
-    feedStreamFrame(tracker, agent, frame)
-    activeSession = session
-    publish(session, tracker.render())
+    const runtime = runtimeFor(agent.session)
+    feedStreamFrame(runtime.tracker, agent, frame)
+    feed(runtime, runtime.tracker.render())
   }) as never)
 
   ctx.on('session/disposed', (session) => {
-    trackers.delete(session)
-    if (activeSession === session) activeSession = undefined
+    const runtime = runtimes.get(session)
+    if (runtime !== undefined) stopTimer(runtime)
+    runtimes.delete(session)
+    if (slotSession === session) slotSession = undefined
   })
 
   ctx.on('agent/status', ({ agent, status }) => {
-    const session = agent.session
-    const tracker = trackerFor(session)
-    tracker.onAgentStatus(status)
-    activeSession = session
-    publish(session, tracker.render())
+    const runtime = runtimeFor(agent.session)
+    runtime.tracker.onAgentStatus(status)
+    feed(runtime, runtime.tracker.render())
   })
 
-  // Continuous tick: elapsed times and the phrase rotation move on their own.
-  // A manual timer keeps this plugin free of the @cordisjs/plugin-timer mixin;
-  // the effect disposer clears it when this fiber unloads.
-  const tickTimer = setInterval(() => {
-    if (activeSession === undefined) return
-    const tracker = trackers.get(activeSession)
-    if (tracker === undefined) return
-    publish(activeSession, tracker.render())
-  }, resolved.tickMs)
-  ctx.effect(() => () => { clearInterval(tickTimer) }, 'working-activity tick timer')
+  // No interval: each session's next redraw is armed from its own tracker
+  // (`nextWakeAt`), so idle and settled lines hold no timer at all. The effect
+  // disposer stops every pending wake-up when this fiber unloads.
+  ctx.effect(() => () => {
+    for (const runtime of runtimes.values()) stopTimer(runtime)
+  }, 'working-activity session timers')
 }

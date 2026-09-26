@@ -519,6 +519,96 @@ export class ActivityTracker {
     }
   }
 
+  /**
+   * The next instant at which {@link render} can produce a different line, or
+   * `undefined` when the line stays exactly as it is until another event
+   * arrives.
+   *
+   * A status line does not need a heartbeat: it needs to be redrawn when
+   * something it displays moves. Those movements are all known here — the
+   * elapsed second, the phrase rotation, a narration or tok/s window closing,
+   * and the done card swapping its tool fragment for the summary — so a caller
+   * can sleep exactly that long instead of polling. Idle and settled lines
+   * return `undefined`: nothing about them changes on its own, so they need no
+   * timer at all. Transitions on a longer horizon than the displayed second
+   * (the work reminder, for one) need no candidate of their own: the elapsed
+   * counter redraws long before them.
+   *
+   * The value is a lower bound on the next visible change, so waking at it can
+   * only be early, never late.
+   * @param nowMs - Wall-clock instant to measure from.
+   * @returns the next wake instant in epoch milliseconds, or `undefined`.
+   */
+  nextWakeAt(nowMs: number = this.now()): number | undefined {
+    switch (this.phase) {
+      case 'idle':
+        return undefined
+      case 'done': {
+        // The done line shows the last tool's fragment for a short window and
+        // then the summary; after that it is static until the next turn.
+        const last = this.doneQueue.at(-1)
+        if (last === undefined) return undefined
+        const swapAt = last.endedAt + DONE_FRAGMENT_MS
+        return nowMs < swapAt ? swapAt : undefined
+      }
+      case 'tool': {
+        const tool = this.primaryTool()
+        // `render` falls back to the thinking line when no tool is tracked.
+        if (tool === undefined) return this.liveWakeAt(nowMs, this.thinkingStartedAt)
+        return minWake(
+          secondBoundary(tool.startedAt, nowMs),
+          this.narrationWakeAt(nowMs),
+          this.tpsWakeAt(nowMs),
+        )
+      }
+      case 'waiting':
+      case 'thinking':
+        return this.liveWakeAt(nowMs, this.turnStartedAt)
+    }
+  }
+
+  /**
+   * Wake instant for a live phase that displays the turn's elapsed second: the
+   * next whole second, whichever of the other displayed windows closes first,
+   * and the phrase rotation — or the expiry of a one-off quip, which the render
+   * after it replaces.
+   * @param nowMs - Wall-clock instant to measure from.
+   * @param elapsedFrom - Instant the displayed second counter counts from.
+   */
+  private liveWakeAt(nowMs: number, elapsedFrom: number): number | undefined {
+    return minWake(
+      secondBoundary(elapsedFrom, nowMs),
+      this.rotationWakeAt(),
+      this.narrationWakeAt(nowMs),
+      this.tpsWakeAt(nowMs),
+    )
+  }
+
+  /** When the displayed phrase is replaced: a rotation, or a quip expiring. */
+  private rotationWakeAt(): number | undefined {
+    if (!this.config.phrases) return undefined
+    if (this.pendingPhrase !== null) return this.pendingUntil
+    // Before the first render there is no rotation deadline yet: the render
+    // that sets `phraseChangedAt` also produces the phrase being displayed.
+    if (this.phraseChangedAt <= 0) return undefined
+    // Rare eggs linger longer than the ordinary pool.
+    const rare = this.previousPhrase !== undefined && this.isRarePhrase(this.previousPhrase)
+    return this.phraseChangedAt + (rare ? RARE_ROTATE_MS : PHRASE_ROTATE_MS)
+  }
+
+  /** When the currently displayed narration expires, if one is displayed. */
+  private narrationWakeAt(nowMs: number): number | undefined {
+    if (this.freshNarration(nowMs) === null) return undefined
+    return this.lastChunkAt + NARRATE_GRACE_MS
+  }
+
+  /** When the displayed tok/s estimate ages out, if one is displayed. */
+  private tpsWakeAt(nowMs: number): number | undefined {
+    if (this.config.showTokPerSec !== true || this.tokBuf <= 0) return undefined
+    if (this.tpsPrefix(nowMs) === '') return undefined
+    return this.lastChunkAt + TPS_WINDOW_MS
+  }
+
   private renderThinking(nowMs: number): ActivityState {
     const thinkingMs = this.phase === 'waiting'
       ? 0
@@ -690,6 +780,28 @@ export class ActivityTracker {
     this.phase = phase
     this.phaseStartedAt = atMs
   }
+}
+
+/** Earliest of the candidate wake instants, ignoring the absent ones. */
+function minWake(...candidates: readonly (number | undefined)[]): number | undefined {
+  let earliest: number | undefined
+  for (const candidate of candidates) {
+    if (candidate === undefined) continue
+    if (earliest === undefined || candidate < earliest) earliest = candidate
+  }
+  return earliest
+}
+
+/**
+ * The next whole second after `nowMs`, counted from `from`. The line renders
+ * elapsed time with second resolution, so this is the finest cadence a live
+ * phase can actually show.
+ * @param from - Instant the displayed counter counts from.
+ * @param nowMs - Current instant.
+ */
+function secondBoundary(from: number, nowMs: number): number {
+  const elapsed = Math.max(0, nowMs - from)
+  return from + (Math.floor(elapsed / 1000) + 1) * 1000
 }
 
 /** Rotate the thinking phrase every N render ticks (render cadence ≈ 500ms → ~4s). */
