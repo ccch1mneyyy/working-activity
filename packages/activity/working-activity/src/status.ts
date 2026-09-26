@@ -10,7 +10,7 @@ import type { ActivityEvent } from './activity-event.js'
 import {
   actionFor, compactPhrase, continuePhrase, donePhrase, failPhrase, fmtDuration,
   holidayPhrase, isGitTool, isNight, isWeekend, mixSlot, modelQuip, overflowPhrase, rarePhrase,
-  RARE_CHANCE, thinkingPhrase, weekendPhrase, waitingPhrase,
+  RARE_CHANCE, thinkingPhrase, toolOpeningPhrase, weekendPhrase, waitingPhrase,
   type PhraseSlot,
 } from './phrases.js'
 import { feedSessionEvent } from './compat/session-events.js'
@@ -27,7 +27,7 @@ export type ActivityPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
  * persisted projection checkpoint from an older build is discarded (the host
  * refolds the log) instead of being misread as the new shape.
  */
-export const TRACKER_SNAPSHOT_VERSION = 3
+export const TRACKER_SNAPSHOT_VERSION = 4
 
 /** One snapshot of the model's activity, renderable by any UI. */
 export interface ActivityState {
@@ -109,6 +109,8 @@ interface DoneTool {
   readonly detail: string
   readonly failed: boolean
   readonly endedAt: number
+  /** How long the tool ran; shown while the settled line lingers. */
+  readonly durationMs: number
 }
 
 /**
@@ -130,6 +132,8 @@ interface TrackerSnapshotShape {
   readonly doneQueue: readonly DoneTool[]
   /** Thinking phases entered this turn — the rare egg shows in the first one. */
   readonly thinkingPhases: number
+  /** When the turn's first tool started (drives the thinking→doing opening line). */
+  readonly firstToolStartedAt: number
   readonly waitingFirstToken: boolean
   readonly narratedText: string | null
   readonly lastChunkAt: number
@@ -153,6 +157,18 @@ interface TrackerSnapshotShape {
 /** Format one tool into its display fragment (`跑个命令 npm test`). */
 function toolFragment(tool: { action: string; detail: string }): string {
   return tool.detail.length === 0 ? tool.action : `${tool.action} ${tool.detail}`
+}
+
+/**
+ * Duration label for a settled tool: sub-second tools read in milliseconds.
+ *
+ * The shared `fmtDuration` is second-granular, which renders the measured
+ * median tool (87 ms) as a meaningless `0s` — the settled line exists to make
+ * that work visible, so it has to say how long it took.
+ * @param ms - Tool duration in milliseconds.
+ */
+function durationLabel(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)}ms` : fmtDuration(ms)
 }
 
 /** Simple non-ANSI string shortener by grapheme count. */
@@ -214,6 +230,8 @@ export class ActivityTracker {
   private thinkingMs = 0
   private toolMs = 0
   private toolCount = 0
+  /** When the turn's first tool started; 0 until it does (see {@link toolOpening}). */
+  private firstToolStartedAt = 0
   private activeTools = new Map<string, ActiveTool>()
   private doneQueue: DoneTool[] = []
   private thinkingPhases = 0
@@ -336,6 +354,7 @@ export class ActivityTracker {
         // Eggs are once-per-turn and derived from the turn's seed, so a fresh
         // turn only needs its phase counter cleared.
         this.thinkingPhases = 0
+        this.firstToolStartedAt = 0
         // Per-turn stats reset; the pending quip (interrupt/model/compact)
         // survives across the turn boundary so it shows on the next think.
         this.streak = 0
@@ -415,6 +434,9 @@ export class ActivityTracker {
         if (this.phase === 'thinking' || this.phase === 'waiting') {
           this.thinkingMs += at - this.thinkingStartedAt
         }
+        // The turn's first tool is where "thinking" turns into "doing": its
+        // opening line is derived from this instant (see toolOpening).
+        if (this.firstToolStartedAt === 0) this.firstToolStartedAt = at
         // Combo streak: consecutive tools within COMBO_GAP_MS count up.
         this.streak = (this.lastToolEndAt > 0 && at - this.lastToolEndAt <= COMBO_GAP_MS)
           ? this.streak + 1
@@ -452,6 +474,10 @@ export class ActivityTracker {
           detail: active.detail,
           failed: active.failed,
           endedAt: at,
+          // Kept so the settled line can show how long it took: on real
+          // sessions the median tool is 87 ms, so the duration is most of what
+          // there is to read.
+          durationMs: Math.max(0, at - active.startedAt),
         })
         if (this.doneQueue.length > DONE_QUEUE_MAX) this.doneQueue.shift()
         this.activeTools.delete(callId)
@@ -543,21 +569,27 @@ export class ActivityTracker {
           return this.renderThinking(nowMs)
         }
         const fragment = toolFragment(tool)
-        const elapsed = fmtDuration(Math.max(0, nowMs - tool.startedAt))
+        // Same granularity as the settled line: a fast tool's counter would
+        // otherwise sit at `0s` for its whole (measured 87 ms median) life.
+        const elapsed = durationLabel(Math.max(0, nowMs - tool.startedAt))
         const git = tool.isGit
           ? (this.gitBranch !== undefined ? ` · git ${this.gitBranch}` : ' · git')
           : ''
         const combo = this.streak >= COMBO_SHOW_AT ? ` · ${t('tool-streak', { count: this.streak })}` : ''
         const narration = this.freshNarration(nowMs)
+        // The turn's first tool opens with a short "thought it through, getting
+        // to work" line, prepended so the tool's own copy stays readable.
+        const opening = this.toolOpening(nowMs)
+        const prefix = opening === '' ? '' : `${opening} · `
         const line = narration === null
-          ? `${fragment} · ${elapsed}${git}${combo}`
-          : `⏵ ${narration} · ${fragment} · ${elapsed}${git}${combo}`
+          ? `${prefix}${fragment} · ${elapsed}${git}${combo}`
+          : `⏵ ${narration} · ${prefix}${fragment} · ${elapsed}${git}${combo}`
         return {
           phase: 'tool',
           line,
           label: tool.action,
           detail: tool.detail,
-          ...(narration === null ? {} : { phrase: narration }),
+          ...(narration === null ? (opening === '' ? {} : { phrase: opening }) : { phrase: narration }),
           toolCount: this.toolCount,
           turnElapsedMs: this.turnElapsedMs(nowMs),
           phaseStartedAt: this.phaseStartedAt,
@@ -606,6 +638,7 @@ export class ActivityTracker {
       activeTools: [...this.activeTools.values()],
       doneQueue: this.doneQueue,
       thinkingPhases: this.thinkingPhases,
+      firstToolStartedAt: this.firstToolStartedAt,
       waitingFirstToken: this.waitingFirstToken,
       narratedText: this.narratedText,
       lastChunkAt: this.lastChunkAt,
@@ -667,6 +700,7 @@ export class ActivityTracker {
     tracker.activeTools = new Map(data.activeTools.map(tool => [tool.callId, { ...tool }]))
     tracker.doneQueue = data.doneQueue.map(tool => ({ ...tool }))
     tracker.thinkingPhases = data.thinkingPhases
+    tracker.firstToolStartedAt = data.firstToolStartedAt
     tracker.waitingFirstToken = data.waitingFirstToken
     tracker.narratedText = data.narratedText
     tracker.lastChunkAt = data.lastChunkAt
@@ -781,6 +815,13 @@ export class ActivityTracker {
       : this.thinkingMs + Math.max(0, nowMs - this.thinkingStartedAt)
     const elapsed = fmtDuration(this.turnElapsedMs(nowMs))
     const elapsedLine = t('line-elapsed', { elapsed })
+    // A tool that just settled keeps its own copy on screen for a beat. Measured
+    // on real sessions: the median tool lasts 87 ms and 73% last under 500 ms, so
+    // without this the tool line is a single frame nobody can read. It outranks
+    // the narration for its window — the narration is usually the same `⏵` line
+    // from before the tool, while this one is the news.
+    const settled = this.settledToolLine(nowMs)
+    if (settled !== null) return settled
     const narration = this.freshNarration(nowMs)
     if (narration !== null) {
       return {
@@ -845,6 +886,50 @@ export class ActivityTracker {
   applyLiveNarration(narration: string, at: number): void {
     this.narratedText = narration
     this.lastChunkAt = at
+  }
+
+  /**
+   * The "thought it through, getting to work" line for the turn's first tool.
+   *
+   * Shown as a prefix for a short window after that tool starts, then gone: it
+   * marks the thinking→doing boundary once per turn, and being derived (like
+   * every other phrase) it neither rotates nor repeats within the window.
+   * @param nowMs - Wall-clock instant to test.
+   * @returns the opening copy, or '' when the window is closed.
+   */
+  private toolOpening(nowMs: number): string {
+    if (!this.config.phrases) return ''
+    if (this.firstToolStartedAt === 0) return ''
+    if (nowMs - this.firstToolStartedAt >= TOOL_OPENING_MS) return ''
+    return toolOpeningPhrase({ seed: this.turnStartedAt, slot: 0 })
+  }
+
+  /**
+   * The just-finished tool, while its copy is still worth reading.
+   *
+   * Derived from the last settled tool's end time, so it neither lingers past
+   * its window nor depends on how often the line is read. `✓` marks it as
+   * settled, so it cannot be mistaken for the running-tool line.
+   * @param nowMs - Wall-clock instant to test.
+   * @returns the settled-tool state, or null when the window is closed.
+   */
+  private settledToolLine(nowMs: number): ActivityState | null {
+    if (!this.config.phrases) return null
+    const last = this.doneQueue.at(-1)
+    if (last === undefined) return null
+    const age = nowMs - last.endedAt
+    if (age < 0 || age >= TOOL_LINGER_MS) return null
+    const fragment = toolFragment(last)
+    return {
+      phase: this.phase === 'waiting' ? 'thinking' : this.phase,
+      line: `✓ ${fragment} · ${durationLabel(last.durationMs)}`,
+      label: last.action,
+      detail: last.detail,
+      phrase: last.action,
+      toolCount: this.toolCount,
+      turnElapsedMs: this.turnElapsedMs(nowMs),
+      phaseStartedAt: this.phaseStartedAt,
+    }
   }
 
   /** The pending one-off quip (interrupt / model / compact / work reminder)
@@ -1031,6 +1116,15 @@ const PHRASE_ROTATE_MS = 4000
 const RARE_ROTATE_MS = 7500
 /** One-off quips (interrupt / model / compact) display window. */
 const PENDING_MS = 6000
+/** How long the thinking→doing opening line rides the turn's first tool. */
+const TOOL_OPENING_MS = 2500
+/**
+ * How long a settled tool keeps its own line before the copy returns to phrases.
+ *
+ * Real-session measurement: median tool 87 ms, 73% under 500 ms — shorter than a
+ * single client re-read, so without a linger the tool line is unreadable.
+ */
+const TOOL_LINGER_MS = 2500
 /** Tools closer than this count as one combo streak. */
 const COMBO_GAP_MS = 10_000
 /** Streak at which the combo badge shows. */

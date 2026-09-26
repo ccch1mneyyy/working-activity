@@ -576,6 +576,29 @@ export function waitingPhrase(previous?: string, at?: PhraseSlot): string {
   return draw(waitingPool(), previous, at)
 }
 
+/**
+ * The line shown when thinking turns into doing: the turn's first tool call.
+ *
+ * Deliberately its own pool rather than part of the thinking copy — it marks a
+ * transition, so it must read as one ("thought it through, getting to work")
+ * instead of as another "the model is busy" fragment.
+ */
+export const TOOL_OPENING_PHRASES: readonly string[] = [
+  '想好了，上手', '琢磨完了，动手', '思路有了，开干', '盘明白了，开工',
+  '脑内预演完毕', '想清楚了，来',
+]
+
+/** English mirror of {@link TOOL_OPENING_PHRASES}. */
+export const EN_TOOL_OPENING_PHRASES: readonly string[] = [
+  'figured it out, hands on', 'plan set, going in', 'thought it through, off we go',
+  'done mulling, starting', 'brainstorm done, hands on',
+]
+
+/** Pick the thinking→doing opening line in the active language. */
+export function toolOpeningPhrase(at?: PhraseSlot): string {
+  return draw(langNow() === 'en' ? EN_TOOL_OPENING_PHRASES : TOOL_OPENING_PHRASES, undefined, at)
+}
+
 /** Pick a tool-failure phrase in the active language. */
 export function failPhrase(): string {
   return pickPhrase(langNow() === 'en' ? EN_FAIL_PHRASES : FAIL_PHRASES)

@@ -24,7 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { setLangOverride } from '../src/lang.ts'
 import {
   EN_WAITING_PHRASES, EN_THINKING_PHRASES, EN_NIGHT_PHRASES,
-  NIGHT_PHRASES, THINKING_PHRASES, WAITING_PHRASES,
+  EN_TOOL_OPENING_PHRASES, NIGHT_PHRASES, THINKING_PHRASES, TOOL_OPENING_PHRASES, WAITING_PHRASES,
 } from '../src/phrases.ts'
 import { ActivityTracker, TRACKER_SNAPSHOT_VERSION, type TrackerConfig } from '../src/status.ts'
 
@@ -85,9 +85,10 @@ describe('a read is a function of the state', () => {
   })
 
   it('leaves a stable snapshot version for persistent checkpoints', () => {
-    // The purity rework removed the phrase/rotation/egg fields; the version bump
-    // is what retires checkpoints written by the older shape.
-    expect(TRACKER_SNAPSHOT_VERSION).toBe(3)
+    // The purity rework removed the phrase/rotation/egg fields, and the
+    // tool-transition work added the settled-tool duration + first-tool instant;
+    // the version bump is what retires checkpoints written by the older shape.
+    expect(TRACKER_SNAPSHOT_VERSION).toBe(4)
   })
 })
 
@@ -125,5 +126,52 @@ describe('phase pools never cross', () => {
     const phrase = line.replace(/ · .*$/u, '')
     expect(thinkingPools.has(phrase)).toBe(false)
     expect(waitingPools.has(phrase)).toBe(false)
+  })
+})
+
+describe('the tool transition stays readable', () => {
+  // Real-session measurement behind these two windows: the median tool lasts
+  // 87 ms and 73% last under 500 ms — shorter than one client re-read — so a
+  // line that only exists while the tool RUNS is a line nobody sees.
+  const opening = new Set<string>([...TOOL_OPENING_PHRASES, ...EN_TOOL_OPENING_PHRASES])
+
+  it('opens the turn\'s first tool with the thinking→doing line', () => {
+    const { tracker, read } = harness()
+    tracker.onEvent({ kind: 'stream-delta', at: START + 100, stream: 'reasoning', text: '看一下' })
+    tracker.onEvent({ kind: 'tool-start', at: START + 200, callId: 'c1', name: 'bash', arguments: '{"command":"ls"}' })
+
+    const during = read(START + 500)
+    expect(opening.has(during.split(' · ')[0] ?? ''), `opening copy expected, got ${during}`).toBe(true)
+    // …and it is a prefix: the tool's own copy is still on the line.
+    expect(during).toContain('ls')
+    // Closed after its window.
+    expect(opening.has(read(START + 3200).split(' · ')[0] ?? '')).toBe(false)
+  })
+
+  it('does not reopen the line for later tools in the same turn', () => {
+    const { tracker, read } = harness()
+    tracker.onEvent({ kind: 'stream-delta', at: START + 100, stream: 'reasoning', text: '看一下' })
+    tracker.onEvent({ kind: 'tool-start', at: START + 200, callId: 'c1', name: 'bash', arguments: '{"command":"ls"}' })
+    tracker.onEvent({ kind: 'tool-end', at: START + 400, callId: 'c1', failed: false })
+    tracker.onEvent({ kind: 'tool-start', at: START + 6000, callId: 'c2', name: 'read', arguments: '{"file_path":"a.ts"}' })
+
+    const second = read(START + 6200)
+    expect(opening.has(second.split(' · ')[0] ?? ''), `no opening for the second tool, got ${second}`).toBe(false)
+  })
+
+  it('keeps a settled tool on screen after it ends', () => {
+    const { tracker, read } = harness()
+    tracker.onEvent({ kind: 'stream-delta', at: START + 100, stream: 'reasoning', text: '看一下' })
+    tracker.onEvent({ kind: 'tool-start', at: START + 200, callId: 'c1', name: 'read', arguments: '{"file_path":"src/a.ts"}' })
+    tracker.onEvent({ kind: 'tool-end', at: START + 287, callId: 'c1', failed: false })
+
+    const settled = read(START + 800)
+    expect(settled.startsWith('✓ '), `settled marker expected, got ${settled}`).toBe(true)
+    expect(settled).toContain('src/a.ts')
+    expect(settled).toContain('87ms')
+
+    // Past the linger window the line returns to ordinary thinking copy.
+    const later = read(START + 4000)
+    expect(later.startsWith('✓ ')).toBe(false)
   })
 })
