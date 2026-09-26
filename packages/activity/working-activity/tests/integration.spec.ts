@@ -162,15 +162,17 @@ describe('working-activity through the agent loop', () => {
   })
 
   it('injects the narration contract and surfaces the ⏵ line from the stream', async () => {
-    // First response: a reasoning delta carrying the narration, then text.
+    // First response: the narration line rides the visible text block. A
+    // reasoning delta must NOT narrate (its ⏵ mentions are the model talking
+    // about the format, not using it), so the fixture carries one of those too.
     const adapter = new MockAdapter([
       [
         { type: 'block-start', index: 0, blockType: 'reasoning' },
-        { type: 'reasoning-delta', index: 0, text: '⏵ 查一下报错原因' },
-        { type: 'block-end', index: 0, block: { type: 'reasoning', text: '⏵ 查一下报错原因' } },
+        { type: 'reasoning-delta', index: 0, text: '用户要求 ⏵ 引用一下这个格式' },
+        { type: 'block-end', index: 0, block: { type: 'reasoning', text: '用户要求 ⏵ 引用一下这个格式' } },
         { type: 'block-start', index: 1, blockType: 'text' },
-        { type: 'text-delta', index: 1, text: '好的，我来看看。' },
-        { type: 'block-end', index: 1, block: { type: 'text', text: '好的，我来看看。' } },
+        { type: 'text-delta', index: 1, text: '⏵ 查一下报错原因\n好的，我来看看。' },
+        { type: 'block-end', index: 1, block: { type: 'text', text: '⏵ 查一下报错原因\n好的，我来看看。' } },
         { type: 'usage', usage: { inputTokens: 10, outputTokens: 20 } },
         { type: 'finish', reason: { kind: 'stop' } },
       ],

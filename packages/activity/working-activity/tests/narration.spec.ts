@@ -37,6 +37,11 @@ function reasoningDelta(time: number, text: string): SessionEvent {
   return eventAt('assistant/chunk', time, { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text } })
 }
 
+/** A visible-body delta: the only stream kind that may carry narration. */
+function textDelta(time: number, text: string): SessionEvent {
+  return eventAt('assistant/chunk', time, { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text } })
+}
+
 function toolCall(time: number, callId: string, name: string, args = '{}'): SessionEvent {
   return eventAt('tool/call', time, { turn: 1, step: 1, callId, name, arguments: args })
 }
@@ -48,8 +53,25 @@ function turnEnd(time: number): SessionEvent {
 describe('extractNarration', () => {
   it('extracts the latest ⏵ line from a buffer', () => {
     expect(extractNarration('⏵ 查一下报错原因 先看看日志')).toBe('查一下报错原因 先看看日志')
-    expect(extractNarration('前面的话 ⏵ 修复登录页样式。')).toBe('修复登录页样式')
+    expect(extractNarration('前面的话\n⏵ 修复登录页样式。')).toBe('修复登录页样式')
     expect(extractNarration('⏵ 第一个\n⏵ 第二个')).toBe('第二个')
+  })
+
+  it('ignores a marker the model only mentions inside a sentence', () => {
+    // Measured live: the line quoted a fragment out of the middle of the
+    // model's prose, because the contract itself is written with ⏵ in it.
+    expect(extractNarration('前面的话 ⏵ 修复登录页样式。')).toBeNull()
+    expect(extractNarration('状态栏会显示 `⏵ 你在做的事情` 这一行')).toBeNull()
+    expect(extractNarration('like ⏵ this')).toBeNull()
+    // A real line still wins when it follows the quote.
+    expect(extractNarration('它会显示 ⏵ 引用\n⏵ 真正的那一行')).toBe('真正的那一行')
+  })
+
+  it('flattens whatever the model wrote into one readable line', () => {
+    // ANSI/OSC go as complete sequences, never as `[2J`-style residue.
+    expect(extractNarration('⏵ 修样式\u001B[2J 然后重跑')).toBe('修样式 然后重跑')
+    expect(extractNarration('⏵ 修样式\u001B]0;标题\u0007继续')).toBe('修样式继续')
+    expect(extractNarration('⏵ 修\u0007样式\r继续')).toBe('修 样式 继续')
   })
 
   it('keeps a long English narration intact through the newline', () => {
@@ -116,28 +138,59 @@ describe('ActivityTracker narration', () => {
     const clock = fixedClock()
     const tracker = new ActivityTracker(LIVE_CONFIG, clock.now)
     tracker.onSessionEvent(turnStart(clock.now()))
-    tracker.onSessionEvent(reasoningDelta(clock.now(), '⏵ 查一下报错原因 先看看日志'))
+    tracker.onSessionEvent(textDelta(clock.now(), '⏵ 查一下报错原因 先看看日志'))
     clock.advance(1000)
     const state = tracker.render()
     expect(state.phase).toBe('thinking')
     expect(state.line).toContain('⏵ 查一下报错原因')
   })
 
+  it('never narrates from reasoning deltas', () => {
+    // The line is the model's VISIBLE status; its private thinking quotes the
+    // ⏵ contract itself, and quoting it back at the user is the defect.
+    const clock = fixedClock()
+    const tracker = new ActivityTracker(LIVE_CONFIG, clock.now)
+    tracker.onSessionEvent(turnStart(clock.now()))
+    tracker.onSessionEvent(reasoningDelta(clock.now(), '用户说 ⏵ ..." line at the start'))
+    tracker.onSessionEvent(reasoningDelta(clock.now(), '\n⏵ 这是思考里的引用'))
+    clock.advance(1000)
+    const state = tracker.render()
+    // Reasoning still promotes the phase (it is a first token) — it just
+    // never becomes copy.
+    expect(state.phase).toBe('thinking')
+    expect(state.line).not.toContain('⏵')
+    expect(state.line).not.toContain('line at the start')
+  })
+
   it('keeps the latest narration across deltas', () => {
     const clock = fixedClock()
     const tracker = new ActivityTracker(LIVE_CONFIG, clock.now)
     tracker.onSessionEvent(turnStart(clock.now()))
-    tracker.onSessionEvent(reasoningDelta(clock.now(), '⏵ 修复登录页样式'))
+    tracker.onSessionEvent(textDelta(clock.now(), '⏵ 修复登录页样式'))
     clock.advance(3000)
-    tracker.onSessionEvent(reasoningDelta(clock.now(), '⏵ 给补丁跑个验证'))
+    tracker.onSessionEvent(textDelta(clock.now(), '\n⏵ 给补丁跑个验证'))
     expect(tracker.render().line).toContain('⏵ 给补丁跑个验证')
+  })
+
+  it('flattens a multi-line tool fragment onto the one line', () => {
+    const clock = fixedClock()
+    const tracker = new ActivityTracker(LIVE_CONFIG, clock.now)
+    tracker.onSessionEvent(turnStart(clock.now()))
+    tracker.onSessionEvent(toolCall(
+      clock.now(), 'c1', 'bash', JSON.stringify({ command: 'npm test\nnpm run lint' }),
+    ))
+    clock.advance(1000)
+    const state = tracker.render()
+    expect(state.phase).toBe('tool')
+    expect(state.line).not.toMatch(/[\n\r\u001b]/)
+    expect(state.line).toContain('npm test npm run lint')
   })
 
   it('falls back to the copy pool once the stream is quiet', () => {
     const clock = fixedClock()
     const tracker = new ActivityTracker(LIVE_CONFIG, clock.now)
     tracker.onSessionEvent(turnStart(clock.now()))
-    tracker.onSessionEvent(reasoningDelta(clock.now(), '⏵ 修复登录页样式'))
+    tracker.onSessionEvent(textDelta(clock.now(), '⏵ 修复登录页样式'))
     clock.advance(6000)
     const line = tracker.render().line
     expect(line).not.toContain('⏵ 修复登录页样式')
@@ -148,7 +201,7 @@ describe('ActivityTracker narration', () => {
     const clock = fixedClock()
     const tracker = new ActivityTracker(LIVE_CONFIG, clock.now)
     tracker.onSessionEvent(turnStart(clock.now()))
-    tracker.onSessionEvent(reasoningDelta(clock.now(), '⏵ 跑一下测试'))
+    tracker.onSessionEvent(textDelta(clock.now(), '⏵ 跑一下测试'))
     tracker.onSessionEvent(toolCall(clock.now(), 'c1', 'bash', JSON.stringify({ command: 'npm test' })))
     clock.advance(2000)
     const state = tracker.render()
@@ -215,7 +268,7 @@ describe('English narration', () => {
     const clock = fixedClock()
     const tracker = new ActivityTracker(LIVE_CONFIG, clock.now)
     tracker.onSessionEvent(turnStart(clock.now()))
-    tracker.onSessionEvent(reasoningDelta(clock.now(), '⏵ Inspecting auth'))
+    tracker.onSessionEvent(textDelta(clock.now(), '⏵ Inspecting auth'))
     clock.advance(2000)
     const state = tracker.render()
     expect(state.phase).toBe('thinking')

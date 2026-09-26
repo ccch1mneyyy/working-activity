@@ -179,6 +179,30 @@ function shorten(value: string, limit: number): string {
 }
 
 /**
+ * Flatten model-written text for the single-line render path.
+ *
+ * The line is composed from text the model wrote (its `⏵` narration, the path
+ * or command inside a tool call), and it is displayed by a terminal and by the
+ * Web UI. So this is where that text stops being able to do anything but be
+ * read: complete ANSI/OSC sequences go first (stripping only their control
+ * bytes would leave `[31m` residue behind), every remaining C0/C1 control char
+ * becomes a space — a `\n` inside a multi-line shell command would otherwise
+ * split the status line in two — and whitespace collapses, because a render
+ * path is one line by definition.
+ * @param value - Raw model-written fragment.
+ * @returns the fragment, safe and single-line.
+ */
+function sanitizeFragment(value: string): string {
+  return value
+    .replace(/\u001B\][^\u0007]*(?:\u0007|\u001B\\)/gu, '')
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '')
+    // eslint-disable-next-line no-control-regex -- deliberate: model text is untrusted render input
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
  * Extract a displayable detail fragment from a tool call's parsed arguments.
  * @param toolName - Registry tool name.
  * @param args - Parsed tool arguments (lossless JSON by registry contract).
@@ -188,7 +212,7 @@ export function detailFor(toolName: string, args: Readonly<Record<string, unknow
   const pickString = (...keys: readonly string[]): string => {
     for (const key of keys) {
       const value = args[key]
-      if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+      if (typeof value === 'string' && value.trim().length > 0) return sanitizeFragment(value)
     }
     return ''
   }
@@ -240,7 +264,7 @@ export class ActivityTracker {
   private narratedText: string | null = null
   /** Wall-clock time of the most recent stream delta (narration freshness). */
   private lastChunkAt = 0
-  /** Rolling stream buffer (reasoning + text deltas) for `⏵` extraction. */
+  /** Rolling window of VISIBLE text deltas, for `⏵` extraction (see onEvent). */
   private recentStream = ''
   /** Total tokens reported across the turn's assistant messages. */
   private turnTokens = 0
@@ -394,11 +418,19 @@ export class ActivityTracker {
             this.thinkingStartedAt = at
           }
         }
+        // Streaming token estimate for the tps prefix (pi parity).
+        this.tokBuf += estimateTokens(event.text)
+        // Only VISIBLE output narrates. The injected contract asks for the `⏵`
+        // line at the beginning of the *response body*, and the durable path
+        // (`assistant-settled`) already reads text blocks only — folding
+        // reasoning deltas in here made the line quote the model's private
+        // thinking back at the user. Reported live: the status line showed a
+        // half sentence from reasoning, because thinking about this very
+        // format means writing `⏵` about it.
+        if (event.stream !== 'text') return
         this.recentStream = (this.recentStream + event.text).slice(-STREAM_BUFFER_CHARS)
         const narration = extractNarration(this.recentStream)
         if (narration !== null) this.narratedText = narration
-        // Streaming token estimate for the tps prefix (pi parity).
-        this.tokBuf += estimateTokens(event.text)
         return
       }
       case 'stream-reset': {
@@ -1186,10 +1218,25 @@ function cutToWidth(text: string, max: number): string {
   return soft > 0 ? head.slice(0, soft) : head
 }
 
-/** Extract the latest `⏵` self-narration line from a stream buffer. */
+/**
+ * Extract the latest `⏵` self-narration line from a stream buffer.
+ *
+ * The marker has to START a line. The injected contract asks for one standalone
+ * line, so a `⏵` inside a sentence is the model *mentioning* the format rather
+ * than narrating with it — measured on a live session, where the line quoted a
+ * fragment out of the middle of the model's own prose.
+ *
+ * The text is model output destined for a terminal, so it is flattened here:
+ * an ESC or a newline carried by a delta must not reach the screen (see
+ * {@link sanitizeFragment}).
+ * @param buffer - Rolling window of the visible streamed text.
+ * @returns the narration, or null when the buffer carries none.
+ */
 export function extractNarration(buffer: string): string | null {
-  const matches = [...buffer.matchAll(/⏵[ \t]*([^\n⏵]*)/g)]
-  const latest = matches[matches.length - 1]?.[1]?.trim()
+  const matches = [...buffer.matchAll(/(?:^|\n)⏵[ \t]*([^\n⏵]*)/g)]
+  const matched = matches[matches.length - 1]?.[1]
+  if (matched === undefined) return null
+  const latest = sanitizeFragment(matched)
   if (!latest) return null
 
   // A missing newline must not turn the rest of the response into status text.

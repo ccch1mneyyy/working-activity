@@ -57,7 +57,7 @@ function clock(start = START): {
 function scriptedTurn(from: number): readonly ActivityEvent[] {
   return [
     { kind: 'turn-start', at: from },
-    { kind: 'stream-delta', at: from + 200, stream: 'reasoning', text: '⏵ 看看结构' },
+    { kind: 'stream-delta', at: from + 200, stream: 'text', text: '⏵ 看看结构' },
     { kind: 'tool-start', at: from + 500, callId: 'c1', name: 'bash', arguments: '{"command":"npm test"}' },
     { kind: 'tool-end', at: from + 2500, callId: 'c1', failed: false },
     { kind: 'tool-start', at: from + 3000, callId: 'c2', name: 'read', arguments: '{"file_path":"src/index.ts"}' },
