@@ -51,9 +51,11 @@
     "build:client": "tsdown -c tsdown.config.ts",
     "test": "vitest run",
     "test:alpha2": "pnpm run build && pnpm --dir ../working-activity-alpha2-compat install --frozen-lockfile --strict-peer-dependencies && pnpm --dir ../working-activity-alpha2-compat test",
+    "test:rc2": "pnpm run build && pnpm --dir ../working-activity-rc2-compat install --frozen-lockfile --strict-peer-dependencies && pnpm --dir ../working-activity-rc2-compat test",
     "verify:deps": "node scripts/verify-manifest-deps.mjs",
     "verify:lockfiles": "node scripts/verify-lockfiles.mjs",
-    "prepublishOnly": "npm run verify:deps && npm run verify:lockfiles && npm run build && npm run build:client"
+    "verify:host-vocabulary": "node scripts/verify-host-vocabulary.mjs",
+    "prepublishOnly": "npm run verify:deps && npm run verify:lockfiles && npm run verify:host-vocabulary && npm run build && npm run build:client"
   },
   "license": "BSD-3-Clause",
   "repository": {

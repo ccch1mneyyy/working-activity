@@ -1,0 +1,192 @@
+# Minimal CI for the two artifacts this repository ships:
+#
+#   pi   - the root pi extension package (`pi-working-activity`): plain TS, no
+#          build step, checked with node --experimental-strip-types + tsc.
+#   dsh  - the cordis plugin package `packages/activity/working-activity`.
+#
+# plus the two gates that protect the Host corridors the plugin must keep
+# working: `alpha2-compat` (legacy 0.1.2-alpha.2 fixture) and
+# `host-vocabulary` (Host event/payload drift). `ci-gate` aggregates every
+# required job so branch protection needs a single required status check.
+#
+# Every job is expected to be green on this repository as committed. A job
+# that cannot pass is worse than no job - if one starts failing for an
+# environmental reason, fix or delete it rather than leaving it red.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pi:
+    name: pi extension (root)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package.json
+      # The root package has no package-lock.json, so this resolves the dev
+      # ranges (pi-coding-agent >=0.81.0, pi-tui *) on every run; committing a
+      # root lockfile and switching to `npm ci` would make it reproducible.
+      # --include=dev keeps devDependencies installed even if the runner
+      # exports NODE_ENV=production.
+      - name: Install dev dependencies
+        run: npm install --include=dev --no-audit --no-fund --no-package-lock
+      - name: Syntax check
+        run: npm run check
+      - name: Typecheck
+        run: npm run typecheck
+      # `npm test` is `node --experimental-strip-types --test tests/index.test.ts`
+      # and never exits: the extension's status tick `setInterval`
+      # (extensions/index.ts) stays live because the last case leaves the agent
+      # running, so the runner waits forever. --test-force-exit only replaces
+      # the process exit path; the 9/9 assertions and the exit code are
+      # unchanged. The flag must precede the test path (node ignores options
+      # that follow the script argument). Recommended root fix: append
+      # --test-force-exit to the "test" script, then use `npm test` here.
+      - name: Test
+        run: node --experimental-strip-types --test --test-force-exit tests/index.test.ts
+
+  dsh-plugin:
+    name: dsh plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: packages/activity/working-activity
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: packages/activity/working-activity/pnpm-lock.yaml
+      - name: Install (frozen)
+        run: pnpm install --frozen-lockfile
+      - name: Unit and integration tests
+        run: pnpm run test
+      - name: Manifest dependency gate
+        run: pnpm run verify:deps
+      - name: Lockfile agreement gate
+        run: pnpm run verify:lockfiles
+
+  alpha2-compat:
+    name: legacy corridor (0.1.2-alpha.2 fixture)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: packages/activity/working-activity
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: |
+            packages/activity/working-activity/pnpm-lock.yaml
+            packages/activity/working-activity-alpha2-compat/pnpm-lock.yaml
+      - name: Install (frozen)
+        run: pnpm install --frozen-lockfile
+      # The parent script builds this package, installs the fixture against the
+      # published 0.1.2-alpha.2 graph with a frozen lockfile and strict peer
+      # checks, then runs the fixture's Host integration test. Only the
+      # fixture's node_modules is refreshed; this tree is left as installed
+      # above.
+      - name: alpha.2 corridor
+        run: pnpm run test:alpha2
+
+  rc2-compat:
+    name: current corridor (0.1.7-rc.2 fixture)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: packages/activity/working-activity
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: |
+            packages/activity/working-activity/pnpm-lock.yaml
+            packages/activity/working-activity-rc2-compat/pnpm-lock.yaml
+      - name: Install (frozen)
+        run: pnpm install --frozen-lockfile
+      # Same shape as the alpha.2 job: build, install the fixture against the
+      # published 0.1.7-rc.2 graph (frozen lockfile, strict peers), then run the
+      # fixture's real-Host integration and projection spikes. This is the
+      # corridor the shipping product actually runs, so a shape drift here is a
+      # release blocker rather than an observation.
+      - name: rc.2 corridor
+        run: pnpm run test:rc2
+      # The gate re-derives the Host surfaces from declarations, so it runs
+      # against the fixture tree that the step above just installed.
+      - name: Host vocabulary (rc.2 tree)
+        run: node scripts/verify-host-vocabulary.mjs --tree ../working-activity-rc2-compat
+
+  host-vocabulary:
+    name: host vocabulary drift gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: packages/activity/working-activity
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: packages/activity/working-activity/pnpm-lock.yaml
+      # The gate re-derives the Host surfaces from the declarations resolved
+      # out of this tree, so the tree has to be installed first.
+      - name: Install (frozen)
+        run: pnpm install --frozen-lockfile
+      - name: Host vocabulary
+        run: node scripts/verify-host-vocabulary.mjs
+
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs: [pi, dsh-plugin, alpha2-compat, rc2-compat, host-vocabulary]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every required job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS"
+          if echo "$NEEDS" | grep -Eq '"result": *"(failure|cancelled|skipped)"'; then
+            echo "::error::a required job did not succeed"
+            exit 1
+          fi
+          echo "all required jobs succeeded"
