@@ -17,7 +17,7 @@ import {
   type WorkingActivityView,
 } from '../src/projection.ts'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type { TrackerConfig } from '../src/status.ts'
+import { ActivityTracker, type TrackerConfig } from '../src/status.ts'
 
 const CONFIG: TrackerConfig = { phrases: true, detailLimit: 40, showIdle: false }
 const START = new Date('2026-03-16T12:00:00').getTime()
@@ -45,8 +45,7 @@ function event(type: string, time: number, data: Record<string, unknown> = {}): 
   return { type, seq: 0, time, data } as unknown as SessionEvent
 }
 
-describe('narration through the projection', () => {
-  /** A settled assistant message whose text opens with the `⏵` line. */
+describe('narration through the projection', () => {  /** A settled assistant message whose text opens with the `⏵` line. */
   function narratedTurn(at: number): SessionEvent {
     return event('assistant/message', at, {
       usage: { inputTokens: 10, outputTokens: 5 },
@@ -234,5 +233,48 @@ describe('projection folding', () => {
       },
     }))
     expect((projection.view(next) as WorkingActivityView).toolCount).toBe(1)
+  })
+})
+
+describe('unusable checkpoints degrade, never throw', () => {
+  /**
+   * A checkpoint with ONE field corrupted, built from a real snapshot so the
+   * rest of the shape is exactly what a healthy fold emits — each case feeds
+   * the one guard that must refuse it (a torn write can corrupt any single
+   * field while leaving the others intact).
+   */
+  function corrupted(mutate: (tracker: Record<string, unknown>) => void): unknown {
+    const tracker = new ActivityTracker(CONFIG, () => START)
+    tracker.onEvent({ kind: 'turn-start', at: START })
+    // Wrap the tracker snapshot exactly the way a persisted state carries it.
+    const payload = {
+      tracker: JSON.parse(JSON.stringify(tracker.snapshot())) as Record<string, unknown>,
+      updatedAt: START,
+    }
+    mutate(payload.tracker)
+    return payload
+  }
+
+  it('falls back to a fresh fold instead of throwing, whatever broke', () => {
+    const { projection } = build()
+    const payloads: readonly unknown[] = [
+      // Torn write: barely any shape at all.
+      { tracker: { version: ACTIVITY_PROJECTION_STATE_VERSION, phase: 'busy' }, updatedAt: 5 },
+      // Phase corrupted, everything else intact — the case the numeric
+      // guards cannot see (`render` would return nothing for an unknown
+      // phase, which is what makes this payload dangerous).
+      corrupted(tracker => { tracker.phase = 'busy' }),
+      // An anchor clock corrupted.
+      corrupted(tracker => { tracker.turnStartedAt = 'when?' }),
+    ]
+    for (const payload of payloads) {
+      // `view` runs inside the host's synchronous dispatch: it must answer.
+      const view = projection.view(payload) as WorkingActivityView
+      expect(view.phase).toBe('idle')
+      expect(view.line).toBe('')
+      // And the fold continues from the fresh state.
+      const next = projection.apply(payload, event('turn/start', START, { turn: 1 }))
+      expect((projection.view(next) as WorkingActivityView).phase).toBe('waiting')
+    }
   })
 })

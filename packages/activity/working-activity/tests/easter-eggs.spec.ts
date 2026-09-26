@@ -6,8 +6,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  holidayPhrase, isWeekend, livelyThinkingPhrase, RARE_PHRASES, thinkingPhrase,
-  WEEKEND_PHRASES, continuePhrase, compactPhrase, modelQuip,
+  holidayPhrase, isWeekend, livelyThinkingPhrase, LUNAR_NEW_YEAR_DAYS, RARE_PHRASES,
+  thinkingPhrase, WEEKEND_PHRASES, continuePhrase, compactPhrase, modelQuip,
 } from '../src/phrases.ts'
 import { setLangOverride } from '../src/lang.ts'
 
@@ -80,9 +80,22 @@ describe('livelyThinkingPhrase', () => {
 
 describe('custom phrases', () => {
   it('merges custom phrases into the base thinking pool', () => {
+    // Seeded draws: deterministic (no flaky 1-in-1600 like a random sample),
+    // while still exercising the merge across many pick positions.
     const seen = new Set<string>()
-    for (let i = 0; i < 800; i++) seen.add(thinkingPhrase(0, undefined, false, ['自定义一条']))
+    for (let seed = 0; seed < 400; seed++) {
+      seen.add(thinkingPhrase(0, undefined, false, ['自定义一条'], { seed, slot: 0 }))
+    }
     expect(seen).toContain('自定义一条')
+  })
+})
+
+describe('Lunar New Year table', () => {
+  it('covers the current year and the next one', () => {
+    // The table is hand-extended ("extend yearly"); without this gate it would
+    // expire silently and the egg would just stop firing.
+    const years = Object.keys(LUNAR_NEW_YEAR_DAYS).map(key => Number(key.slice(0, 4)))
+    expect(Math.max(...years)).toBeGreaterThanOrEqual(new Date().getFullYear() + 1)
   })
 })
 

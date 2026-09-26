@@ -8,6 +8,7 @@
  */
 
 import { langNow } from './lang.js'
+import type { WaitingReason } from './activity-event.js'
 
 /** A pool of copy fragments. */
 export type PhrasePool = readonly string[]
@@ -344,11 +345,21 @@ export const EN_LUNAR_NEW_YEAR_PHRASES: readonly string[] = [
   'Gong Xi Fa Cai', 'New Year grind',
 ]
 
-/** Gregorian dates marked as Lunar New Year (2025–2027, extend yearly). */
+/**
+ * Gregorian dates marked as Lunar New Year (2025–2030, extend yearly).
+ *
+ * Each year lists the seven-day holiday block starting at the new moon.
+ * `tests/easter-eggs.spec.ts` fails when the table no longer covers the
+ * current year + 1, so an expired table goes red in CI instead of silently
+ * stopping the egg.
+ */
 export const LUNAR_NEW_YEAR_DAYS: Readonly<Record<string, true>> = {
   '2025-01-29': true, '2025-01-30': true, '2025-01-31': true, '2025-02-01': true, '2025-02-02': true, '2025-02-03': true, '2025-02-04': true,
   '2026-02-17': true, '2026-02-18': true, '2026-02-19': true, '2026-02-20': true, '2026-02-21': true, '2026-02-22': true, '2026-02-23': true,
   '2027-02-06': true, '2027-02-07': true, '2027-02-08': true, '2027-02-09': true, '2027-02-10': true, '2027-02-11': true, '2027-02-12': true,
+  '2028-01-26': true, '2028-01-27': true, '2028-01-28': true, '2028-01-29': true, '2028-01-30': true, '2028-01-31': true, '2028-02-01': true,
+  '2029-02-13': true, '2029-02-14': true, '2029-02-15': true, '2029-02-16': true, '2029-02-17': true, '2029-02-18': true, '2029-02-19': true,
+  '2030-02-03': true, '2030-02-04': true, '2030-02-05': true, '2030-02-06': true, '2030-02-07': true, '2030-02-08': true, '2030-02-09': true,
 }
 
 /** Phrases shown after the user interrupts and the model resumes. */
@@ -394,6 +405,56 @@ export const COMPACT_RETRY_PHRASES: readonly string[] = [
 export const EN_COMPACT_RETRY_PHRASES: readonly string[] = [
   'Retrying now', 'Carrying on', 'Round three', 'Again', 'Picking it back up',
 ]
+
+/**
+ * Phrases while the provider asked for a retry (rate limit / transient error).
+ * The waiting pool cannot say this: "still queuing" reads as the model's own
+ * latency, while a retry is the provider pushing back.
+ */
+export const RETRY_PHRASES: readonly string[] = [
+  '被限流了，缓缓再试', '刚被拒了，退避一下', '稍等，重试中', '429 了，歇口气再来',
+]
+
+/** English retry phrases. */
+export const EN_RETRY_PHRASES: readonly string[] = [
+  'Rate-limited, backing off', 'Rejected — easing off and retrying', 'Holding on, retrying', '429 — catching a breath',
+]
+
+/** Phrases while a tool is parked on the user's approval. */
+export const APPROVAL_PHRASES: readonly string[] = [
+  '在等你点头', '等你批准呢——看一眼？', '模型在等你决定',
+]
+
+/** English approval phrases. */
+export const EN_APPROVAL_PHRASES: readonly string[] = [
+  'Waiting for your go-ahead', 'Your call — approval needed', 'The model is waiting on you',
+]
+
+/** Phrases while the host is compacting the context. */
+export const COMPACTION_START_PHRASES: readonly string[] = [
+  '收拾一下上下文…', '整理背包中…',
+]
+
+/** English compaction-in-progress phrases. */
+export const EN_COMPACTION_START_PHRASES: readonly string[] = [
+  'Packing up context…', 'Tidying the context…',
+]
+
+/**
+ * Pick the copy for one waiting reason, in the active language.
+ *
+ * Deterministic per stall: the caller seeds the draw with the turn and the
+ * stall's start, so repeated reads of one stall show one line (a per-read
+ * re-roll is the flicker bug this module's slot scheme exists to prevent).
+ * @param reason - Why the turn is stalled.
+ * @param at - Slot (seed + window) making the pick reproducible.
+ */
+export function waitingReasonPhrase(reason: WaitingReason, at?: PhraseSlot): string {
+  const en = langNow() === 'en'
+  if (reason === 'retry') return draw(en ? EN_RETRY_PHRASES : RETRY_PHRASES, undefined, at)
+  if (reason === 'approval') return draw(en ? EN_APPROVAL_PHRASES : APPROVAL_PHRASES, undefined, at)
+  return draw(en ? EN_COMPACTION_START_PHRASES : COMPACTION_START_PHRASES, undefined, at)
+}
 
 /** Model-switch quips keyed by a lowercase substring of the model id. */
 export const MODEL_QUIPS: Readonly<Record<string, readonly string[]>> = {

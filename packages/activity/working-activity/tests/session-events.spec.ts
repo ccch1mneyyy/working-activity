@@ -32,6 +32,32 @@ function event(type: string, time: number, data: unknown = {}): SessionEvent {
   return { type, seq: 0, time, data } as unknown as SessionEvent
 }
 
+describe('stall vocabulary', () => {
+  it('maps llm retries to a retry stall', () => {
+    expect(toActivityEvents(event('llm/retry', START))).toEqual([
+      { kind: 'waiting-reason', at: START, reason: 'retry' },
+    ])
+    expect(toActivityEvents(event('llm/retry-started', START))).toEqual([
+      { kind: 'waiting-reason', at: START, reason: 'retry' },
+    ])
+  })
+
+  it('maps approval ask/decide onto the stall and its clear', () => {
+    expect(toActivityEvents(event('approval/asked', START))).toEqual([
+      { kind: 'waiting-reason', at: START, reason: 'approval' },
+    ])
+    expect(toActivityEvents(event('approval/decided', START))).toEqual([
+      { kind: 'waiting-cleared', at: START },
+    ])
+  })
+
+  it('maps compaction start to a compaction stall', () => {
+    expect(toActivityEvents(event('compaction/start', START))).toEqual([
+      { kind: 'waiting-reason', at: START, reason: 'compaction' },
+    ])
+  })
+})
+
 describe('model selection', () => {
   it('normalizes a validated selection into a route change', () => {
     const events = toActivityEvents(event('model/selection', START, {

@@ -28,6 +28,14 @@ export interface ActivityUsage {
 export type ActivityStreamKind = 'text' | 'reasoning'
 
 /**
+ * Why the model is not making progress even though the turn is open: the
+ * provider asked for a retry, a tool is parked on the user's approval, or the
+ * host is compacting the context. Without this the line cannot tell "waiting
+ * on the model" from "the model is waiting on YOU".
+ */
+export type WaitingReason = 'retry' | 'approval' | 'compaction'
+
+/**
  * Why provisional stream state was dropped: the attempt was abandoned (its
  * output will never be settled) or only a partial settlement was committed
  * (`assistant/attempt`). Both clear the buffer; they are not the same event.
@@ -79,6 +87,14 @@ export type ActivityEvent =
   | { readonly kind: 'route-change'; readonly at: number; readonly model: string }
   /** Context compaction finished, or overflowed while trying. */
   | { readonly kind: 'compaction'; readonly at: number; readonly overflow?: boolean }
+  /**
+   * The turn is stalled for `reason`. Stays until the stall resolves: a delta
+   * (the model is producing again), an approval decision, the compaction
+   * settling, or the turn closing.
+   */
+  | { readonly kind: 'waiting-reason'; readonly at: number; readonly reason: WaitingReason }
+  /** A stall resolved (e.g. `approval/decided`): back to the normal pools. */
+  | { readonly kind: 'waiting-cleared'; readonly at: number }
   /** The agent entered another lifecycle status. */
   | { readonly kind: 'agent-status'; readonly at: number; readonly status: 'idle' | 'running' }
   /**

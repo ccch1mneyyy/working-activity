@@ -85,10 +85,10 @@ describe('a read is a function of the state', () => {
   })
 
   it('leaves a stable snapshot version for persistent checkpoints', () => {
-    // The purity rework removed the phrase/rotation/egg fields, and the
-    // tool-transition work added the settled-tool duration + first-tool instant;
-    // the version bump is what retires checkpoints written by the older shape.
-    expect(TRACKER_SNAPSHOT_VERSION).toBe(4)
+    // v5: the waiting-reason stall fields arrived and the read-side `reminded`
+    // flag left (the reminder is derived now); the bump retires checkpoints
+    // written by the older shapes.
+    expect(TRACKER_SNAPSHOT_VERSION).toBe(5)
   })
 })
 

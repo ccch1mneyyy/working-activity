@@ -65,6 +65,25 @@ export function toActivityEvents(event: SessionEvent): readonly ActivityEvent[] 
     if (source?.kind !== 'compact-checkpoint') return []
     return [{ kind: 'compaction', at: event.time }]
   }
+  // The stall vocabulary (0.1.7-rc.2 `KNOWN_SESSION_EVENT_TYPES`; widened
+  // strings because the rc.6-era `SessionEventMap` this package compiles
+  // against predates them). Without these the line cannot tell "waiting on the
+  // model" from "the model is waiting on YOU".
+  if (eventType === 'llm/retry' || eventType === 'llm/retry-started') {
+    // The provider pushed back (rate limit / transient error); the host backs
+    // off before another attempt.
+    return [{ kind: 'waiting-reason', at: event.time, reason: 'retry' }]
+  }
+  if (eventType === 'approval/asked') {
+    // A tool is parked on the user's decision.
+    return [{ kind: 'waiting-reason', at: event.time, reason: 'approval' }]
+  }
+  if (eventType === 'approval/decided') {
+    return [{ kind: 'waiting-cleared', at: event.time }]
+  }
+  if (eventType === 'compaction/start') {
+    return [{ kind: 'waiting-reason', at: event.time, reason: 'compaction' }]
+  }
   switch (event.type) {
     case 'turn/start':
       return [{ kind: 'turn-start', at: event.time }]

@@ -10,7 +10,14 @@
 
 import { DEFAULT_PRESET, isPresetName } from './frames.js'
 
-/** Feature flags that can be switched independently (pi extension parity). */
+/**
+ * Feature flags that can be switched independently (pi extension parity).
+ *
+ * Every name here is HONOURED by the DSH line (the tracker reads it). The pi
+ * extension's list also carries `shimmer` and `cost` — DSH has no shimmer of
+ * its own (the host renders the line) and no cost accounting, so accepting
+ * those keys here would mean silently ignoring them.
+ */
 export const FEATURE_FLAGS = [
   'phrases',          // 俏皮文案池（思考/等待/收尾/工具动词）
   'rareEggs',         // 稀有彩虹彩蛋
@@ -20,9 +27,7 @@ export const FEATURE_FLAGS = [
   'combo',            // 连击火力全开
   'failPhrases',      // 失败文案池
   'modelQuips',       // 模型切换梗
-  'shimmer',          // 文案星辉扫过/彩虹流光
   'continuePhrases',  // 打断后接梗
-  'cost',             // 成本与 token 核算（结束时展示）
 ] as const
 
 /** Feature-flag name type. */
@@ -38,9 +43,7 @@ export const FEATURE_LABELS: Record<FeatureFlag, string> = {
   combo: '工具连击',
   failPhrases: '失败文案',
   modelQuips: '模型切换梗',
-  shimmer: '星辉效果',
   continuePhrases: '打断接梗',
-  cost: '成本与 token',
 }
 
 /** The file-based config, same keys as the pi extension. */
@@ -162,13 +165,12 @@ export function parseWorkingActivityConfig(text: string): ConfigReadResult {
 
 /**
  * Whether a feature is on. Explicit `features` entries win; otherwise
- * `minimal` mode turns everything off (except `cost`, always on).
+ * `minimal` mode turns everything off.
  * @param config - Parsed config.
  * @param name - Feature flag name.
  */
 export function featureOn(config: WorkingActivityConfig, name: FeatureFlag): boolean {
   const explicit = config.features?.[name]
   if (typeof explicit === 'boolean') return explicit
-  if (name === 'cost') return true
   return config.mode !== 'minimal'
 }

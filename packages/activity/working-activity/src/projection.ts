@@ -171,12 +171,23 @@ export function createActivityProjection(options: ActivityProjectionOptions): {
   const now = options.now ?? Date.now
   const fresh = (): ActivityTracker =>
     new ActivityTracker(options.trackerConfig, now, options.customActions)
-  const restore = (state: ActivityProjectionState): ActivityTracker => ActivityTracker.restore(
-    options.trackerConfig,
-    now,
-    options.customActions,
-    state.tracker,
-  )
+  // A checkpoint the tracker refuses is stale, not fatal: `view` runs inside
+  // the host's synchronous dispatch, and a same-version-but-unusable payload
+  // (torn write, hand-edited cache) must degrade to "fold from here" rather
+  // than throw through every listener. The host's own version gate still
+  // discards checkpoints from older builds before they get here.
+  const restoreOrFresh = (state: ActivityProjectionState): ActivityTracker => {
+    try {
+      return ActivityTracker.restore(
+        options.trackerConfig,
+        now,
+        options.customActions,
+        state.tracker,
+      )
+    } catch {
+      return fresh()
+    }
+  }
 
   /**
    * Render the current value. Called by the host when a fold changes and on
@@ -187,7 +198,7 @@ export function createActivityProjection(options: ActivityProjectionOptions): {
     // One clock read for the whole value: rendering and deriving the turn's
     // start instant from the rendered elapsed must agree exactly.
     const at = now()
-    const tracker = restore(state)
+    const tracker = restoreOrFresh(state)
     // A projection folds durable events, but the `⏵` self-narration is born on
     // live stream frames. The host that owns those frames overlays the freshest
     // one here, so the value keeps the live narration without writing anything
@@ -232,7 +243,7 @@ export function createActivityProjection(options: ActivityProjectionOptions): {
       // An event this unit does not model MUST return the same reference: the
       // host treats it as "zero downstream work".
       if (events.length === 0) return state
-      const tracker = restore(state)
+      const tracker = restoreOrFresh(state)
       for (const activityEvent of events) tracker.onEvent(activityEvent)
       const next = tracker.snapshot()
       const updatedAt = typeof event.time === 'number' ? event.time : state.updatedAt

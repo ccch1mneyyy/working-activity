@@ -446,15 +446,29 @@ describe('ActivityTracker one-off quips and live extras', () => {
     expect(tracker.render().line).toMatch(/~?\d+ tok\/s/)
   })
 
-  it('fires the work reminder once after the threshold hours', () => {
+  it('shows the work reminder for a derived window, identically on every read', () => {
     const clock = mondayClock()
     const tracker = new ActivityTracker({ ...EGG_FREE_CONFIG, workRemindAt: 1 }, clock.now)
     startThinking(tracker, clock)
-    clock.advance(3_700_000) // > 1h
-    const reminded = tracker.render()
-    expect(reminded.phrase).toMatch(/小时|hour/)
-    clock.advance(10_000)
+    // 1h + 1s into the turn: inside the reminder's window (the window is
+    // measured from each hour bucket's start, so it re-arms every hour).
+    clock.advance(3_601_000)
+    const reminded = tracker.render().phrase
+    expect(reminded).toMatch(/小时|hour/)
+    // A projection reads a throwaway restore per render: repeated reads must
+    // agree (the old one-shot flag was discarded by the restore, which pinned
+    // the reminder for the rest of the turn on the Web side).
+    for (let i = 0; i < 4; i++) {
+      expect(ActivityTracker.restore(
+        { ...EGG_FREE_CONFIG, workRemindAt: 1 }, clock.now, undefined, tracker.snapshot(),
+      ).render().phrase).toBe(reminded)
+    }
+    clock.advance(10_000) // 11s into the bucket: window over
     expect(tracker.render().phrase).not.toMatch(/小时|hour/)
+    clock.advance(3_588_000) // still inside the first bucket
+    expect(tracker.render().phrase).not.toMatch(/小时|hour/)
+    clock.advance(2_000) // 1s into the second hour bucket: re-armed
+    expect(tracker.render().phrase).toMatch(/小时|hour/)
   })
 
   it('keeps the thinking line stable (no ellipsis breathing)', () => {

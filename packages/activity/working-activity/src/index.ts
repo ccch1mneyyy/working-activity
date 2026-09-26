@@ -15,6 +15,9 @@
  * @module @deepseek-ai/dsh-working-activity
  */
 
+import { appendFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -29,6 +32,7 @@ import { createActivityProjection, ACTIVITY_PROJECTION_KEY } from './projection.
 import { registerActivityEventType } from './registration.js'
 import { langNow, setLangOverride, t } from './lang.js'
 import { DEFAULT_PRESET } from './frames.js'
+import { featureOn, type FeatureFlag } from './config.js'
 import type { ActivityState } from './status.js'
 import type { ActivityStatusEvent } from './events.js'
 // Re-export the event type + SessionEventMap merge: the package root must carry
@@ -75,6 +79,12 @@ export type Config = {
   showTokPerSec?: boolean
   /** Work reminder after this many turn-hours (0 = off). */
   workRemindAt?: number
+  /**
+   * Append a JSON trace of every distinct rendered line (phase, copy-pool
+   * inputs, slot) to the debug log — the only way to answer "why did it say
+   * THAT" after the fact, since the line is derived, not stored. Default OFF.
+   */
+  debugLog?: boolean
 }
 
 // Explicit annotation: the inferred z.dict output references cosmokit's
@@ -96,6 +106,7 @@ export const Config: Schemastery<Config> = z.object({
   customPhrases: z.array(z.string()).default([]),
   showTokPerSec: z.boolean().default(false),
   workRemindAt: z.number().min(0).max(24).default(0),
+  debugLog: z.boolean().default(false),
 })
 
 /** Structural view of the TUI prompt service; the real type lives in dsh-tui. */
@@ -122,6 +133,7 @@ interface ResolvedConfig {
   customPhrases: string[]
   showTokPerSec: boolean
   workRemindAt: number
+  debugLog: boolean
 }
 
 /**
@@ -152,7 +164,14 @@ export function apply(ctx: Context, config: Config = {}): void {
     customPhrases: config.customPhrases ?? [],
     showTokPerSec: config.showTokPerSec ?? false,
     workRemindAt: config.workRemindAt ?? 0,
+    debugLog: config.debugLog ?? false,
   }
+  // Trace target for {@link traceLine}: `~/.dsh-tui` mirrors where the UI keeps
+  // this plugin's config file; the env var redirects it (tests, bug reports).
+  const debugLogPath = resolved.debugLog
+    ? process.env.DSH_WORKING_ACTIVITY_DEBUG_LOG
+      ?? join(homedir(), '.dsh-tui', 'working-activity-debug.log')
+    : undefined
   // A pinned plugin-level language beats the env/file chain; releasing it on
   // dispose restores `auto` for any other composition in the process.
   setLangOverride(resolved.lang)
@@ -173,6 +192,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     lastPublishedLine?: string
     lastPublishedPhase?: string
     lastPublishAt: number
+    /** Last line written to the debug trace (dedupe; see {@link traceLine}). */
+    lastLoggedLine?: string
   }
 
   const runtimes = new Map<Session, SessionRuntime>()
@@ -205,11 +226,26 @@ export function apply(ctx: Context, config: Config = {}): void {
   }
 
   /** Tracker knobs shared by the live runtimes and the Web projection. */
+  // Feature flags resolve ONCE here (an explicit `features` entry beats the
+  // mode default) so every consumer applies the same gates. `features.phrases`
+  // folds into the master switch — the schema's `phrases` default must not
+  // mask a user's explicit `features: { phrases: false }`.
+  const fileLike = { features: resolved.features, mode: resolved.mode }
+  const on = (name: FeatureFlag): boolean => featureOn(fileLike, name)
   const trackerConfig: TrackerConfig = {
-    phrases: resolved.phrases,
+    phrases: resolved.phrases && on('phrases'),
     detailLimit: resolved.detailLimit,
     showIdle: false,
-    features: resolved.features,
+    features: {
+      rareEggs: on('rareEggs'),
+      weekend: on('weekend'),
+      holidays: on('holidays'),
+      nightPhrases: on('nightPhrases'),
+      combo: on('combo'),
+      failPhrases: on('failPhrases'),
+      modelQuips: on('modelQuips'),
+      continuePhrases: on('continuePhrases'),
+    },
     customPhrases: resolved.customPhrases,
     showTokPerSec: resolved.showTokPerSec,
     workRemindAt: resolved.workRemindAt,
@@ -317,11 +353,34 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (runtime.timer === undefined) armTimer(runtime)
   }
 
+  /**
+   * Append one JSON line per distinct rendered line to the debug log (opt-in:
+   * {@link Config.debugLog}). The trace carries the derivation inputs — phase,
+   * copy pool, slot — because the line itself is derived, so this file is the
+   * only place "why did it say THAT" can be answered from.
+   */
+  const traceLine = (logPath: string, runtime: SessionRuntime, state: ActivityState): void => {
+    if (state.line === runtime.lastLoggedLine) return
+    runtime.lastLoggedLine = state.line
+    const at = Date.now()
+    const entry = {
+      at,
+      session: String((runtime.session as unknown as { id: unknown }).id ?? ''),
+      line: state.line,
+      ...runtime.tracker.describe(at),
+    }
+    void appendFile(logPath, `${JSON.stringify(entry)}\n`, 'utf8').catch(() => {
+      // A debug log that cannot be written (permissions, disk full) must
+      // never break the line itself.
+    })
+  }
+
   /** Publish one rendered snapshot: TUI slot update + throttled session event. */
   const publish = (runtime: SessionRuntime, state: ActivityState): void => {
     queueMicrotask(() => {
       const line = state.phase === 'idle' ? undefined : state.line
       if (runtime.session === slotSession) promptHandle?.set(line)
+      if (debugLogPath !== undefined) traceLine(debugLogPath, runtime, state)
       if (!resolved.publish) return
       const nowMs = Date.now()
       const lineChanged = state.line !== runtime.lastPublishedLine
@@ -358,6 +417,11 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.on('session/event', (session, event) => {
     const runtime = runtimeFor(session)
     runtime.tracker.onSessionEvent(event)
+    // Re-key the live narration onto the fold's new state object: `apply`
+    // returns a fresh cell per fold, so without this the overlay would stay on
+    // the previous cell and a read right after a durable event (a tool
+    // starting, say) would lose the freshest `⏵` line until the next frame.
+    noteLiveNarration(session, runtime.tracker)
     feed(runtime, runtime.tracker.render())
   })
 

@@ -6,11 +6,11 @@
  * @module @deepseek-ai/dsh-working-activity/status
  */
 
-import type { ActivityEvent } from './activity-event.js'
+import type { ActivityEvent, WaitingReason } from './activity-event.js'
 import {
   actionFor, compactPhrase, continuePhrase, donePhrase, failPhrase, fmtDuration,
   holidayPhrase, isGitTool, isNight, isWeekend, mixSlot, modelQuip, overflowPhrase, rarePhrase,
-  RARE_CHANCE, thinkingPhrase, toolOpeningPhrase, weekendPhrase, waitingPhrase,
+  RARE_CHANCE, thinkingPhrase, toolOpeningPhrase, weekendPhrase, waitingPhrase, waitingReasonPhrase,
   type PhraseSlot,
 } from './phrases.js'
 import { feedSessionEvent } from './compat/session-events.js'
@@ -27,7 +27,7 @@ export type ActivityPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
  * persisted projection checkpoint from an older build is discarded (the host
  * refolds the log) instead of being misread as the new shape.
  */
-export const TRACKER_SNAPSHOT_VERSION = 4
+export const TRACKER_SNAPSHOT_VERSION = 5
 
 /** One snapshot of the model's activity, renderable by any UI. */
 export interface ActivityState {
@@ -69,6 +69,14 @@ export interface TrackerFeatures {
   readonly holidays?: boolean
   /** Night-owl copy between 00:00 and 06:00. */
   readonly nightPhrases?: boolean
+  /** Consecutive-tool streak badge. */
+  readonly combo?: boolean
+  /** Playful failure copy when the turn's last tool failed. */
+  readonly failPhrases?: boolean
+  /** Quips on a model route change. */
+  readonly modelQuips?: boolean
+  /** Comeback quip after the user interrupts. */
+  readonly continuePhrases?: boolean
 }
 
 /** Configuration knobs for the state machine (subset of plugin Config). */
@@ -149,7 +157,10 @@ interface TrackerSnapshotShape {
   readonly lastToolEndAt: number
   readonly maxStreak: number
   readonly subagentCount: number
-  readonly reminded: boolean
+  /** Current stall, or null (`WaitingReason` for the reason). */
+  readonly waitingReason: WaitingReason | null
+  /** When the current stall began (0 with none). */
+  readonly waitingReasonAt: number
   readonly tokBuf: number
   readonly tokWindowStart: number
 }
@@ -157,6 +168,14 @@ interface TrackerSnapshotShape {
 /** Format one tool into its display fragment (`跑个命令 npm test`). */
 function toolFragment(tool: { action: string; detail: string }): string {
   return tool.detail.length === 0 ? tool.action : `${tool.action} ${tool.detail}`
+}
+
+/** The phase vocabulary, for snapshot shape validation (see {@link ActivityTracker.restore}). */
+const PHASES: readonly ActivityPhase[] = ['idle', 'waiting', 'thinking', 'tool', 'done']
+
+/** Whether `value` is one of {@link PHASES}. */
+function isPhase(value: unknown): value is ActivityPhase {
+  return PHASES.includes(value as ActivityPhase)
 }
 
 /**
@@ -168,7 +187,8 @@ function toolFragment(tool: { action: string; detail: string }): string {
  * @param ms - Tool duration in milliseconds.
  */
 function durationLabel(ms: number): string {
-  return ms < 1000 ? `${Math.round(ms)}ms` : fmtDuration(ms)
+  // Floor, not round: 999.6 ms is "999ms", not a "1000ms" that never happened.
+  return ms < 1000 ? `${Math.max(0, Math.floor(ms))}ms` : fmtDuration(ms)
 }
 
 /** Simple non-ANSI string shortener by grapheme count. */
@@ -284,8 +304,16 @@ export class ActivityTracker {
   private maxStreak = 0
   /** Subagent (agent/task) calls in the current turn. */
   private subagentCount = 0
-  /** Work-reminder fired once per turn. */
-  private reminded = false
+  /**
+   * Why the turn is stalled, when it is (retry / approval / compaction).
+   *
+   * A stall is state, not decoration: "waiting on the model" and "the model is
+   * waiting on YOU" need different copy, so it outranks the phrase pools and
+   * survives `phrases: false`.
+   */
+  private waitingReason: WaitingReason | undefined
+  /** When the current stall began (seeds its copy; 0 with no stall). */
+  private waitingReasonAt = 0
   /** Streaming token estimate for the tps prefix. */
   private tokBuf = 0
   private tokWindowStart = 0
@@ -319,6 +347,7 @@ export class ActivityTracker {
   /** The user interrupted the running turn: show a comeback quip next. */
   onInterrupted(): void {
     if (!this.config.phrases) return
+    if ((this.config.features ?? {}).continuePhrases === false) return
     this.pendingPhrase = continuePhrase()
     this.pendingUntil = this.now() + PENDING_MS
   }
@@ -335,6 +364,7 @@ export class ActivityTracker {
     if (modelId === this.model) return
     this.model = modelId
     if (!this.config.phrases) return
+    if ((this.config.features ?? {}).modelQuips === false) return
     const quip = modelQuip(modelId)
     if (quip !== null) {
       this.pendingPhrase = quip
@@ -344,6 +374,8 @@ export class ActivityTracker {
 
   /** A context compaction finished (or overflowed): quip about it. */
   onCompact(kind: 'done' | 'overflow'): void {
+    // The compaction stall (if any) is over either way.
+    if (this.waitingReason === 'compaction') this.clearWaitingReason()
     if (!this.config.phrases) return
     this.pendingPhrase = kind === 'overflow' ? overflowPhrase() : compactPhrase()
     this.pendingUntil = this.now() + PENDING_MS
@@ -384,7 +416,7 @@ export class ActivityTracker {
         this.streak = 0
         this.maxStreak = 0
         this.subagentCount = 0
-        this.reminded = false
+        this.clearWaitingReason()
         this.tokBuf = 0
         this.tokWindowStart = at
         this.setPhase('waiting', at)
@@ -407,6 +439,8 @@ export class ActivityTracker {
       case 'stream-delta': {
         const at = event.at
         this.lastChunkAt = at
+        // Output is flowing again — whatever stalled the turn is over.
+        this.clearWaitingReason()
         if (this.waitingFirstToken) {
           this.waitingFirstToken = false
           // A delta that arrives while a tool runs must not steal the phase:
@@ -513,6 +547,8 @@ export class ActivityTracker {
         })
         if (this.doneQueue.length > DONE_QUEUE_MAX) this.doneQueue.shift()
         this.activeTools.delete(callId)
+        // An approval-parked tool resolved the moment it settled.
+        if (this.waitingReason === 'approval') this.clearWaitingReason()
         if (this.activeTools.size === 0) {
           // Back to thinking (or a trailing done card if the turn just closed).
           this.setPhase('thinking', at)
@@ -537,11 +573,14 @@ export class ActivityTracker {
         // ended in.
         const lastTool = this.doneQueue.at(-1)
         if (this.config.phrases) {
-          this.donePrefix = lastTool?.failed ? failPhrase() : donePhrase()
+          this.donePrefix = lastTool?.failed
+            ? ((this.config.features ?? {}).failPhrases !== false ? failPhrase() : t('done-prefix'))
+            : donePhrase()
         } else {
           this.donePrefix = t('done-prefix')
         }
         if (event.interrupted === true) this.onInterrupted()
+        this.clearWaitingReason()
         this.setPhase('done', at)
         return
       }
@@ -550,6 +589,13 @@ export class ActivityTracker {
         return
       case 'compaction':
         this.onCompact(event.overflow === true ? 'overflow' : 'done')
+        return
+      case 'waiting-reason':
+        this.waitingReason = event.reason
+        this.waitingReasonAt = event.at
+        return
+      case 'waiting-cleared':
+        this.clearWaitingReason()
         return
       case 'agent-status':
         this.onAgentStatus(event.status)
@@ -607,15 +653,20 @@ export class ActivityTracker {
         const git = tool.isGit
           ? (this.gitBranch !== undefined ? ` · git ${this.gitBranch}` : ' · git')
           : ''
-        const combo = this.streak >= COMBO_SHOW_AT ? ` · ${t('tool-streak', { count: this.streak })}` : ''
+        const combo = (this.config.features ?? {}).combo !== false && this.streak >= COMBO_SHOW_AT
+          ? ` · ${t('tool-streak', { count: this.streak })}`
+          : ''
+        // An approval-parked tool says so even in minimal mode: this is the one
+        // state where the user, not the model, is the one being waited on.
+        const approval = this.waitingReason === 'approval' ? ` · ${t('tool-waiting-approval')}` : ''
         const narration = this.freshNarration(nowMs)
         // The turn's first tool opens with a short "thought it through, getting
         // to work" line, prepended so the tool's own copy stays readable.
         const opening = this.toolOpening(nowMs)
         const prefix = opening === '' ? '' : `${opening} · `
         const line = narration === null
-          ? `${prefix}${fragment} · ${elapsed}${git}${combo}`
-          : `⏵ ${narration} · ${prefix}${fragment} · ${elapsed}${git}${combo}`
+          ? `${prefix}${fragment} · ${elapsed}${git}${combo}${approval}`
+          : `⏵ ${narration} · ${prefix}${fragment} · ${elapsed}${git}${combo}${approval}`
         return {
           phase: 'tool',
           line,
@@ -685,7 +736,8 @@ export class ActivityTracker {
       lastToolEndAt: this.lastToolEndAt,
       maxStreak: this.maxStreak,
       subagentCount: this.subagentCount,
-      reminded: this.reminded,
+      waitingReason: this.waitingReason ?? null,
+      waitingReasonAt: this.waitingReasonAt,
       tokBuf: this.tokBuf,
       tokWindowStart: this.tokWindowStart,
     }
@@ -715,8 +767,15 @@ export class ActivityTracker {
     payload?: unknown,
   ): ActivityTracker {
     const data = payload as TrackerSnapshotShape | undefined
+    // The shape guards are deliberately cheap (phase + the two anchor clocks):
+    // they catch the torn-write / hand-edited cache cases a version number
+    // alone cannot, so a corrupt-but-current-version checkpoint fails HERE —
+    // where the projection can catch it and refold — instead of mid-render.
     if (data === undefined || data === null || typeof data !== 'object'
-      || data.version !== TRACKER_SNAPSHOT_VERSION) {
+      || data.version !== TRACKER_SNAPSHOT_VERSION
+      || !isPhase(data.phase)
+      || typeof data.phaseStartedAt !== 'number'
+      || typeof data.turnStartedAt !== 'number') {
       throw new Error(
         `working-activity: unsupported tracker snapshot (expected version ${TRACKER_SNAPSHOT_VERSION})`,
       )
@@ -747,7 +806,8 @@ export class ActivityTracker {
     tracker.lastToolEndAt = data.lastToolEndAt
     tracker.maxStreak = data.maxStreak
     tracker.subagentCount = data.subagentCount
-    tracker.reminded = data.reminded
+    tracker.waitingReason = data.waitingReason ?? undefined
+    tracker.waitingReasonAt = data.waitingReasonAt
     tracker.tokBuf = data.tokBuf
     tracker.tokWindowStart = data.tokWindowStart
     return tracker
@@ -821,7 +881,10 @@ export class ActivityTracker {
   /** When the displayed phrase is replaced: a rotation, or a quip expiring. */
   private rotationWakeAt(nowMs: number): number | undefined {
     if (!this.config.phrases) return undefined
-    if (this.pendingPhrase !== null) return this.pendingUntil
+    // An expired quip is no longer displayed (see pendingPhraseAt), so the
+    // wake falls through to the pool rotation — returning its past expiry
+    // would arm a zero-delay timer that re-arms forever.
+    if (this.pendingPhrase !== null && nowMs < this.pendingUntil) return this.pendingUntil
     // The next window boundary of the phase's own pool. Derived rather than
     // remembered: a read must never be what advances the copy (see phraseForSlot).
     const rotateMs = this.rarePool() ? RARE_ROTATE_MS : PHRASE_ROTATE_MS
@@ -860,6 +923,20 @@ export class ActivityTracker {
         phase: this.phase,
         line: `⏵ ${narration} · ${elapsedLine}`,
         phrase: narration,
+        toolCount: this.toolCount,
+        turnElapsedMs: this.turnElapsedMs(nowMs),
+        phaseStartedAt: this.phaseStartedAt,
+      }
+    }
+    // A stall outranks the copy pools (and survives minimal mode): the pool
+    // says "still queuing", which reads as model latency — a retry or a parked
+    // approval is a different fact the user cannot act on unless it is said.
+    const stall = this.stallPhrase()
+    if (stall !== null) {
+      return {
+        phase: this.phase,
+        line: `${stall} · ${elapsedLine}`,
+        phrase: stall,
         toolCount: this.toolCount,
         turnElapsedMs: this.turnElapsedMs(nowMs),
         phaseStartedAt: this.phaseStartedAt,
@@ -964,22 +1041,38 @@ export class ActivityTracker {
     }
   }
 
-  /** The pending one-off quip (interrupt / model / compact / work reminder)
-   *  while it is still fresh; expired pending is cleared here. */
+  /**
+   * The pending one-off quip (interrupt / model / compact), while fresh.
+   *
+   * A pure read: an expired quip is simply not returned (the field is
+   * overwritten by the next one), and the work reminder has its own derived
+   * window — the old version wrote here (`pendingPhrase = null`,
+   * `reminded = true`), which a projection's throwaway restore discarded, so
+   * the reminder re-fired on EVERY read and pinned the line for the rest of
+   * the turn.
+   */
   private pendingPhraseAt(nowMs: number): string | null {
-    if (this.pendingPhrase !== null) {
-      if (nowMs < this.pendingUntil) return this.pendingPhrase
-      this.pendingPhrase = null
-    }
+    if (this.pendingPhrase !== null && nowMs < this.pendingUntil) return this.pendingPhrase
+    return this.workReminderAt(nowMs)
+  }
+
+  /**
+   * The work reminder, purely derived from elapsed time.
+   *
+   * Shown for {@link PENDING_MS} of wall time each time another `workRemindAt`
+   * hours of continuous work accumulate (`hours % workRemindAt` is the distance
+   * into the current bucket). No state: repeated reads agree, a resumed
+   * checkpoint renders the same answer, and the reminder returns every bucket
+   * instead of once per process.
+   */
+  private workReminderAt(nowMs: number): string | null {
     const remindAt = this.config.workRemindAt ?? 0
-    if (!this.reminded && remindAt > 0) {
-      const hours = this.turnElapsedMs(nowMs) / 3_600_000
-      if (hours >= remindAt) {
-        this.reminded = true
-        return t('work-remind', { hours: Math.floor(hours) })
-      }
-    }
-    return null
+    if (remindAt <= 0) return null
+    const hours = this.turnElapsedMs(nowMs) / 3_600_000
+    if (hours < remindAt) return null
+    const intoBucketMs = (hours % remindAt) * 3_600_000
+    if (intoBucketMs >= PENDING_MS) return null
+    return t('work-remind', { hours: Math.floor(hours) })
   }
 
   /** Estimated tokens/s while the stream is fresh (pi parity, opt-in). */
@@ -995,12 +1088,16 @@ export class ActivityTracker {
     const { thinkingMs, toolMs, toolCount } = this.stats()
     const tokens = this.turnTokens > 0 ? ` · 🔥 ${fmtTokens(this.turnTokens)}` : ''
     const sub = this.subagentCount > 0 ? ` · ${t('subagent-count', { count: this.subagentCount })}` : ''
-    const combo = this.maxStreak >= COMBO_SHOW_AT ? ` · ${t('tool-streak', { count: this.maxStreak })}` : ''
+    const combo = (this.config.features ?? {}).combo !== false && this.maxStreak >= COMBO_SHOW_AT
+      ? ` · ${t('tool-streak', { count: this.maxStreak })}`
+      : ''
     const tools = t(toolCount === 1 ? 'tool-count-one' : 'tool-count-many', { count: toolCount })
+    // Sub-second splits read in milliseconds for the same reason a settled
+    // tool does: a quick turn would otherwise summarize as 想0s 干0s.
     const summary = t('done-summary', {
       tools,
-      thinking: fmtDuration(thinkingMs),
-      tooling: fmtDuration(toolMs),
+      thinking: durationLabel(thinkingMs),
+      tooling: durationLabel(toolMs),
     })
     if (!this.config.phrases) {
       return { line: `${t('done-prefix')} · ${summary}${sub}${combo}${tokens}` }
@@ -1030,6 +1127,50 @@ export class ActivityTracker {
 
   private turnElapsedMs(nowMs: number): number {
     return this.turnStartedAt === 0 ? 0 : Math.max(0, nowMs - this.turnStartedAt)
+  }
+
+  /** Drop the current stall, whatever it was. */
+  private clearWaitingReason(): void {
+    this.waitingReason = undefined
+    this.waitingReasonAt = 0
+  }
+
+  /**
+   * Copy for the current stall, or null when the turn is not stalled.
+   *
+   * Deterministic per stall — seeded by the turn and the stall's start, so
+   * every read of one stall shows the same line (a per-read re-roll is the
+   * flicker bug the slot scheme exists to prevent).
+   */
+  private stallPhrase(): string | null {
+    if (this.waitingReason === undefined) return null
+    return waitingReasonPhrase(this.waitingReason, {
+      seed: this.turnStartedAt + this.waitingReasonAt,
+      slot: 0,
+    })
+  }
+
+  /**
+   * How the current line is derived — the debug trace behind the optional
+   * `debugLog`, so "why did it say THAT" is answerable from a file instead of
+   * from memory.
+   * @param nowMs - Wall-clock instant to describe.
+   * @returns the derivation inputs of the current render.
+   */
+  describe(nowMs: number = this.now()): Record<string, unknown> {
+    const rotateMs = this.rarePool() ? RARE_ROTATE_MS : PHRASE_ROTATE_MS
+    return {
+      phase: this.phase,
+      phraseSlot: this.phraseSlot(nowMs, rotateMs),
+      rotateMs,
+      rarePool: this.rarePool(),
+      thinkingPhases: this.thinkingPhases,
+      waitingReason: this.waitingReason ?? null,
+      pendingPhrase: this.pendingPhrase ?? null,
+      narration: this.narratedText ?? null,
+      toolCount: this.toolCount,
+      turnElapsedMs: this.turnElapsedMs(nowMs),
+    }
   }
 
   private setPhase(phase: ActivityPhase, atMs: number): void {

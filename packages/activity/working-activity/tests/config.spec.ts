@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_ACTIVITY_CONFIG, featureOn, normalizeThresholds, parseWorkingActivityConfig,
+  DEFAULT_ACTIVITY_CONFIG, FEATURE_FLAGS, featureOn, normalizeThresholds, parseWorkingActivityConfig,
 } from '../src/config.ts'
 
 describe('parseWorkingActivityConfig', () => {
@@ -71,8 +71,11 @@ describe('featureOn', () => {
   })
 
   it('cost is always on', () => {
-    expect(featureOn({ mode: 'minimal' as const }, 'cost')).toBe(true)
-    expect(featureOn({ mode: 'lively' as const }, 'cost')).toBe(true)
+    // `cost` (and `shimmer`) are pi-extension-only surfaces: the DSH line has
+    // neither, so the flag list must not accept them — a parsed-but-ignored
+    // switch is a silently broken user config.
+    expect(FEATURE_FLAGS).not.toContain('cost')
+    expect(FEATURE_FLAGS).not.toContain('shimmer')
   })
 
   it('lively defaults everything on', () => {
