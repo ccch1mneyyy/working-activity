@@ -1,2 +1,27 @@
 allowBuilds:
   esbuild: true
+
+# pnpm 11 no longer reads package.json's "pnpm" field, so settings live here.
+#
+# `overrides` holds the rc.6 development baseline's shared transitives at the
+# baseline version. `@deepseek-ai/dsh-agent-loop@0.1.0-rc.6` declares
+# `@deepseek-ai/dsh-settings` as a PEER with the range `^0.1.0-rc.6` — a range
+# that spans a breaking change: `0.1.7-rc.2` dropped `installSettingsSection`,
+# which the rc.6 testkit calls. When the Web half's client packages entered this
+# tree, one re-resolution moved that peer up to 0.1.7-rc.2 and
+# `tests/integration.spec.ts` went from "4 tests pass" to "the suite does not
+# load", with nothing in the diff to explain it. The pin keeps the corridor
+# reproducible no matter how the resolution graph shifts later; `dsh-brand`
+# rides along in the same closure.
+#
+# DEV-ONLY: overrides are read from the install root, so this applies to the
+# package's own development tree and is ignored when the package is installed as
+# a dependency — the published artifact keeps advertising wide peer corridors.
+#
+# This tree necessarily holds TWO host closures at once (the rc.6 baseline and
+# the 0.1.7 client cohort the Web half compiles against), so `pnpm peers check`
+# reports the newer cohort wanting newer host pins than the baseline installs.
+# Those warnings are the accepted cost of one tree covering both corridors.
+overrides:
+  '@deepseek-ai/dsh-brand': 0.1.0-rc.6
+  '@deepseek-ai/dsh-settings': 0.1.0-rc.6

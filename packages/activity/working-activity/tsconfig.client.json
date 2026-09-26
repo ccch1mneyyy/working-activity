@@ -12,7 +12,13 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "strict": true,
-    "types": [],
+    // The client program consumes the host half's view type by TYPE-ONLY import
+    // (`../projection.js`), which pulls the host type graph — and its node
+    // builtins — into this program. Node types are here for that graph alone:
+    // browser purity is enforced at build time by the bundle purity gate plus
+    // scripts/verify-client-bundle.mjs (every emitted require must be a platform
+    // seed word), not by withholding globals.
+    "types": ["node"],
     "rootDir": "src",
     "outDir": "lib/types",
     "noUnusedLocals": false,

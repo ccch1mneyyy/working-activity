@@ -14,7 +14,7 @@ Folds the durable session stream (`turn/start`, `assistant/chunk`, `tool/call`, 
 Two optional sinks, both off by default only when their seam is absent:
 
 1. **TUI prompt slot** — registers the `${activity}` template value on `ctx.tuiPrompt` when the TUI is composed. Add `${activity}` to `theme.leftPrompt` to see it next to `cwd`/`model`/`context`.
-2. **Session events** — appends log-only `activity/status` events (never surface events: the model never sees them) for Web and other UI consumers; replay ignores them.
+2. **Session events** — appends log-only `activity/status` events (never surface events: the model never sees them) for log-replaying UI consumers; replay ignores them. The Web client does not use them (see [Web usage](#web-usage)).
 
 ## Installation
 
@@ -39,8 +39,8 @@ inserting a second same-id row:
 ```
 
 Host and TUI integration supports the DSH `0.1.0-rc.6` and `0.1.1-rc` lines,
-plus `0.1.2-alpha.2`. The optional Web client still uses the rc client-runtime
-contract and is not covered by alpha.2 compatibility.
+plus `0.1.2-alpha.2`. The optional Web client targets the current client cohort
+(`0.1.7-rc.2`, session projection) and is not covered by alpha.2 compatibility.
 
 ## Optional invariant companion
 
@@ -85,19 +85,22 @@ While a turn runs, the prompt line shows e.g. `dsh main 跑个命令 npm test ·
 
 ## Web usage
 
-The Web client renders the live line two ways, both fed by the `activity/status` events:
+The Web half is one entry — `WorkingLine` on `conversation.input.dock` — rendered as a single dim row above the composer card (phase-colored marker, the host's line, the turn's tool count). It renders nothing before the first value and while the phase is `idle`.
 
-- The turn-level status label (`TurnStatus`, formerly the static "Deep diving...") shows the live line while a turn runs, keeping its sweep animation.
-- A working-line dock entry (`WorkingLine` on `conversation.input.dock`) renders the turn-end statistics (token/elapsed/tool summary) above the composer after a turn settles; live phases stay on the turn label.
+**Transport: a session projection, not the session log.** The node half folds every committed session event into the `workingActivity` session projection, and the host ships the whole value (phase, `line`, tool count, timestamps) to clients through the projection store. The browser reads it with the session standard kit's `useProjection('workingActivity')`. What follows from that:
 
-Both fall back to the previous static label while the plugin is absent, so the Web UI is unaffected by disabling it.
+- **Nothing is appended to the session log** for the Web UI: no `publish: true` session is needed, and no log becomes unresumable on this package's account.
+- **The runtime patch is obsolete.** Earlier releases required a patched `@deepseek-ai/dsh-client-runtime` that copied `activity/status` events onto `ConversationSnapshot.activity`. That package is frozen at `0.1.1-rc.2` and absent from the current (`0.1.7-rc.2`) host line; this package no longer declares it, and the `ConversationSnapshot.activity` declaration merge is gone. The projection is the only transport.
+- **The elapsed counter refreshes on events.** `line` is painted exactly as the host rendered it at the last fold, so a running tool's `· 12s` can lag until the next committed event; client-side ticking is a known follow-up (the value carries `phaseStartedAt` / `turnStartedAt` for it).
+
+The entry declares the client cohort it actually uses — in `peerDependencies` and in `dsh.client.inject`: `@deepseek-ai/dsh-client-ui-slots` (slot contract), `@deepseek-ai/dsh-client-ui-conversation` (the dock seat), `@deepseek-ai/dsh-client-ui-session` (the session standard kit supplying `useProjection`), `@deepseek-ai/dsh-client-ui-renderer` (the `slots` service it registers through), and `@deepseek-ai/dsh-session-projection` (the projection key's type table). Every one of them is an optional peer, so a profile without the Web composition is unaffected.
 
 ## Configuration
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `phrases` | `boolean` | `true` | Playful copy pool; `false` renders plain functional labels |
-| `publish` | `boolean` | `false` | Append `activity/status` session events for UI consumers. Off by default: appended events currently make session logs unresumable (see note below) |
+| `publish` | `boolean` | `false` | Append `activity/status` session events for log-replaying UI consumers. Off by default: appended events currently make session logs unresumable (see note below). The Web client reads the session projection instead and needs none of this |
 | `tickMs` | `number` | `500` | Status render tick interval (100–5000) |
 | `publishIntervalMs` | `number` | `2000` | Minimum interval between published events while the line is stable (500–30000) |
 | `detailLimit` | `number` | `40` | Max displayed detail length (paths/commands/patterns), 8–120 |
@@ -149,4 +152,4 @@ No system-prompt contribution, so no cache-stability effect.
 - **Narration is opt-in**: the `⏵` self-narration contract (model writes a short status line at the top of each reply) is injected by default (`narrate: true`); set `narrate: false` for a purely event-derived line.
 - **No progress percentages**: DSH has no tool progress events; a long tool shows elapsed time only.
 - **No animated frames**: the TUI slot renders a static text fragment; frame animation (moon/comet/braille presets) is deferred until the prompt-slot contract supports a frame callback.
-- **Web dock entry duplicates the turn label**: the input-dock `WorkingLine` and the chat `TurnStatus` show the same snapshot; the dock entry exists for session views where the turn label is not visible.
+- **Web elapsed text is event-driven**: the dock entry paints the host's `line` as folded, so a long tool's seconds can lag until the next committed event; client-side ticking against `phaseStartedAt` / `turnStartedAt` is deferred.

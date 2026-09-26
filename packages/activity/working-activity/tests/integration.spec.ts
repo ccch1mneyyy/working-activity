@@ -4,6 +4,13 @@
  * session log, and the append guard are real. This is the regression net for
  * the synchronous-append reentry bug: activity/status publishes deferred into a
  * microtask must land for every phase transition, including fast tools.
+ *
+ * If this suite fails to LOAD (rather than failing an assertion) with
+ * "`@deepseek-ai/dsh-settings` does not provide an export named
+ * `installSettingsSection`", the rc.6 development corridor drifted: that peer
+ * was resolved up into the 0.1.7 line, which dropped the API this testkit calls.
+ * The fix is the `overrides` pin in `pnpm-workspace.yaml` (its comment has the
+ * full story) — not adapting this test to the newer API.
  * @module @deepseek-ai/dsh-working-activity/tests/integration
  */
 

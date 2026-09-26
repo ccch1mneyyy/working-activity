@@ -1,50 +1,43 @@
 /**
- * Client-side activity snapshot type + the ConversationSnapshot merge that
- * carries it.
+ * Client-side contract of the working-activity Web half: the `workingActivity`
+ * key of the session-projection type table.
  *
- * The host half (@deepseek-ai/dsh-working-activity's node side) publishes
- * `activity/status` session events; the web runtime patch (dsh-client-runtime
- * activity field, shipping separately) narrows those frames into the
- * conversation snapshot's `activity` member. Until that runtime release lands
- * on npm, this module re-declares the field via declaration merging so the
- * dock component type-checks against the published rc.6 types.
+ * The browser reads the line through the session standard kit's
+ * `useProjection('workingActivity')` — the host folds the projection from
+ * committed session events and ships the whole value, so no client-side domain
+ * folding exists and nothing is appended to the session log.
  *
- * REMOVE the `declare module` block below once
- * `@deepseek-ai/dsh-client-runtime/client` ships `ConversationSnapshot.activity`
- * natively (the runtime's own `ActivityStatusView` is structurally identical
- * to {@link ActivitySnapshot}; the two then agree by construction).
+ * The runtime patch that used to carry the value on the conversation snapshot
+ * (`ConversationSnapshot.activity`, declared against `@deepseek-ai/dsh-client-runtime`)
+ * is obsolete for the current host line: that package is frozen at `0.1.1-rc.2`
+ * and absent from the `0.1.7-rc.2` client cohort.
+ *
+ * {@link WorkingActivityView} is imported from the host half on purpose — one
+ * definition of the wire value, so the two halves cannot drift. The import is
+ * TYPE-ONLY: a value import would pull host-only code (zod, node builtins) into
+ * the browser bundle, which the build's purity gate rejects.
  * @module @deepseek-ai/dsh-working-activity/client/activity
  */
 
-/** The `activity/status` phase vocabulary, mirroring the host's ActivityPhase. */
-export type ActivityPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
+import type { SessionProjectionMap } from '@deepseek-ai/dsh-session-projection/types'
+import type { WorkingActivityView } from '../projection.js'
 
-/** One `activity/status` snapshot as rendered by the dock line. */
-export interface ActivitySnapshot {
-  /** Which activity phase the model is in right now. */
-  readonly phase: ActivityPhase
-  /** Full human-readable status line (plain text, no ANSI). */
-  readonly line: string
-  /** Short label of the current work (tool action or stage), when any. */
-  readonly label?: string
-  /** Detail fragment (path / command / search pattern), when any. */
-  readonly detail?: string
-  /** The playful phrase currently shown, when any. */
-  readonly phrase?: string
-  /** Tools completed in the current turn. */
-  readonly toolCount: number
-  /** Wall-clock milliseconds since the current turn started (0 when idle). */
-  readonly turnElapsedMs: number
-  /** Wall-clock time the current phase started, for animations. */
-  readonly phaseStartedAt: number
-}
-
-declare module '@deepseek-ai/dsh-client-runtime/client' {
-  interface ConversationSnapshot {
+declare module '@deepseek-ai/dsh-session-projection/types' {
+  interface SessionProjectionMap {
     /**
-     * Latest validated `activity/status` snapshot (the working-activity
-     * plugin's live working line), or null before the first publish.
+     * Latest folded working line for the current session, or absent while the
+     * host unit is unmounted or no committed event has folded yet.
      */
-    activity: ActivitySnapshot | null
+    workingActivity: WorkingActivityView
   }
 }
+
+/**
+ * The projection key this package reads, checked against the merged table: a
+ * rename on the host side, or a merge that silently failed to land, is a
+ * compile error here instead of a dock row that never renders.
+ */
+export const ACTIVITY_PROJECTION_KEY =
+  'workingActivity' satisfies Extract<keyof SessionProjectionMap, string>
+
+export type { WorkingActivityView }

@@ -86,6 +86,8 @@ jobs:
         run: pnpm run verify:deps
       - name: Lockfile agreement gate
         run: pnpm run verify:lockfiles
+      - name: Client bundle gate
+        run: pnpm run verify:client-bundle
 
   alpha2-compat:
     name: legacy corridor (0.1.2-alpha.2 fixture)
