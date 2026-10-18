@@ -1,5 +1,9 @@
 allowBuilds:
   esbuild: true
+  # koffi ships prebuilt binaries; its postinstall builds from source and is not
+  # needed for the node-side plugin tests. pnpm 11 fails CI on an unlisted build
+  # script, so deny it explicitly instead of leaving it ambiguous.
+  koffi: false
 
 # pnpm 11 no longer reads package.json's "pnpm" field, so settings live here.
 #

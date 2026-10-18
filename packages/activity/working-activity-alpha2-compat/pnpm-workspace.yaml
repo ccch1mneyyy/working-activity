@@ -1,5 +1,8 @@
 allowBuilds:
   esbuild: true
+  # koffi ships prebuilt binaries; its postinstall builds from source and is not
+  # needed for the node-side fixture.
+  koffi: false
 minimumReleaseAgeExclude:
   - '@deepseek-ai/cordis@4.0.2'
   - '@deepseek-ai/cordis-plugin-include@1.0.7'
