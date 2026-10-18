@@ -4,10 +4,11 @@
 #          build step, checked with node --experimental-strip-types + tsc.
 #   dsh  - the cordis plugin package `packages/activity/working-activity`.
 #
-# plus the two gates that protect the Host corridors the plugin must keep
-# working: `alpha2-compat` (legacy 0.1.2-alpha.2 fixture) and
-# `host-vocabulary` (Host event/payload drift). `ci-gate` aggregates every
-# required job so branch protection needs a single required status check.
+# plus the gates that protect the Host corridors the plugin must keep working:
+# `alpha2-compat` (legacy 0.1.2-alpha.2 fixture), `rc2-compat` (current
+# 0.2.1-rc.2 fixture), and `host-vocabulary` (Host event/payload drift).
+# `ci-gate` aggregates every required job so branch protection needs a single
+# required status check.
 #
 # Every job is expected to be green on this repository as committed. A job
 # that cannot pass is worse than no job - if one starts failing for an
@@ -80,6 +81,8 @@ jobs:
           cache-dependency-path: packages/activity/working-activity/pnpm-lock.yaml
       - name: Install (frozen)
         run: pnpm install --frozen-lockfile
+      - name: Build (host + client declarations)
+        run: pnpm run build
       - name: Unit and integration tests
         run: pnpm run test
       - name: Manifest dependency gate
@@ -119,7 +122,7 @@ jobs:
         run: pnpm run test:alpha2
 
   rc2-compat:
-    name: current corridor (0.1.7-rc.2 fixture)
+    name: current corridor (0.2.1-rc.2 fixture)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:
@@ -140,7 +143,7 @@ jobs:
       - name: Install (frozen)
         run: pnpm install --frozen-lockfile
       # Same shape as the alpha.2 job: build, install the fixture against the
-      # published 0.1.7-rc.2 graph (frozen lockfile, strict peers), then run the
+      # published 0.2.1-rc.2 graph (frozen lockfile, strict peers), then run the
       # fixture's real-Host integration and projection spikes. This is the
       # corridor the shipping product actually runs, so a shape drift here is a
       # release blocker rather than an observation.

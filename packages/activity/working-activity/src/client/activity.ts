@@ -10,7 +10,7 @@
  * The runtime patch that used to carry the value on the conversation snapshot
  * (`ConversationSnapshot.activity`, declared against `@deepseek-ai/dsh-client-runtime`)
  * is obsolete for the current host line: that package is frozen at `0.1.1-rc.2`
- * and absent from the `0.1.7-rc.2` client cohort.
+ * and absent from both the `0.1.7-rc.2` and `0.2.1-rc.2` client cohorts.
  *
  * {@link WorkingActivityView} is imported from the host half on purpose — one
  * definition of the wire value, so the two halves cannot drift. The import is

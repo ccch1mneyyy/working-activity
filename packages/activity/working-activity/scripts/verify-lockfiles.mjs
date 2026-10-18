@@ -98,6 +98,10 @@ for (const field of ALL_FIELDS) {
 
 const npmPackages = npmLock.packages ?? {}
 const hostBaseline = npmPackages['node_modules/@deepseek-ai/dsh-agent-loop']?.version
+/** Host peers whose RC2 release line skipped 0.2.1-rc.2; value is the allowed mirror. */
+const HOST_VERSION_SKEW = new Map([
+  ['@deepseek-ai/dsh-invariants', '0.2.0-rc.2'],
+])
 assert.ok(hostBaseline, 'package-lock.json has no resolved dsh-agent-loop Host baseline')
 const pnpmVersion = value => value?.replace(/^['"]|['"]$/g, '').split('(')[0]
 const pnpmHostBaseline = pnpmVersion(
@@ -114,15 +118,18 @@ for (const name of [
   '@deepseek-ai/dsh-session',
   '@deepseek-ai/dsh-system-prompt',
 ]) {
+  const allowed = HOST_VERSION_SKEW.get(name) ?? hostBaseline
   assert.equal(
     npmPackages[`node_modules/${name}`]?.version,
-    hostBaseline,
-    `package-lock.json mixes Host baselines: ${name} must match dsh-agent-loop ${hostBaseline}`,
+    allowed,
+    `package-lock.json mixes Host baselines: ${name} must match dsh-agent-loop ${hostBaseline}`
+    + (HOST_VERSION_SKEW.has(name) ? ` (or its documented RC2 skew ${allowed})` : ''),
   )
   assert.equal(
     pnpmVersion(pnpmResolved.devDependencies?.[name]),
-    hostBaseline,
-    `pnpm-lock.yaml mixes Host baselines: ${name} must match dsh-agent-loop ${hostBaseline}`,
+    allowed,
+    `pnpm-lock.yaml mixes Host baselines: ${name} must match dsh-agent-loop ${hostBaseline}`
+    + (HOST_VERSION_SKEW.has(name) ? ` (or its documented RC2 skew ${allowed})` : ''),
   )
 }
 

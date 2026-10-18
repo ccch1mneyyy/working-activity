@@ -35,11 +35,20 @@ export type { ActivityPhase }
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /**
-     * Log-only UI snapshot of the model's working activity (thinking copy,
-     * running tool, turn elapsed). Never a surface event: UIs render it, the
-     * model never sees it.
+     * Legacy log-only UI snapshot (pre-0.6 publishing path). Kept declared so
+     * old logs still typecheck and replay; new writes use the plugin-record
+     * name below on hosts that support it.
      * @param data - The rendered status snapshot.
      */
     'activity/status': ActivityStatusEvent
+  }
+  interface PluginRecordMap {
+    /**
+     * Current log-only UI snapshot, written with `appendPluginRecord()` so the
+     * reader admits it as an ignorable record instead of refusing the session.
+     * Never a surface event: UIs render it, the model never sees it.
+     * @param data - The rendered status snapshot.
+     */
+    'plugin:working-activity/status': ActivityStatusEvent
   }
 }

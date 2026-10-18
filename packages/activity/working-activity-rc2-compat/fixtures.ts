@@ -1,5 +1,5 @@
 /**
- * Wire fixtures for the DSH `0.1.7-rc.2` corridor.
+ * Wire fixtures for the DSH `0.2.1-rc.2` corridor.
  *
  * Two generations of the same durable records live here, and they must stay
  * unmixed: the **modern** `tool/result` moved the tool-call id out of the
@@ -10,9 +10,9 @@
  * "just support both" edit cannot quietly widen one generation into the other.
  *
  * `modernAssistantStreamFrames()` mirrors the transient
- * `agent/assistant-stream` frames of the current host; it is exported for the
- * commits that follow this one (the tracker has no frame entry point yet, so
- * nothing consumes it as an assertion input here).
+ * `agent/assistant-stream` frames of the current host — the 0.2.x replacement
+ * for the removed durable `assistant/chunk` event: dense zero-based chunk
+ * indexes, monotone per-attempt revisions, and an explicit settlement outcome.
  * @module dsh-working-activity-rc2-compat/fixtures
  */
 

@@ -1,121 +1,251 @@
 # dsh-working-activity — DSH 实时工作状态行插件
 
-> 非官方出品。DeepSeek Harness 的实时"工作状态行"插件：模型的实时活动 —— 俏皮思考文案、真正在跑的工具、已耗时、收尾摘要 —— 在 agent 干活时展示在 Web UI 与 dsh-cc 终端上。
+非官方项目。DeepSeek Harness（DSH）的实时工作状态行插件：agent 工作期间，把会话的持久事件流与实时模型输出折叠成一行——当前相位文案、真正在跑的工具、已耗时、收尾摘要——并同时提供给终端 TUI、浏览器 Web UI 与桌面 GUI。
 
-作者：chimney（[@ccch1mneyyy](https://github.com/ccch1mneyyy)）
+- 作者：chimney（[@ccch1mneyyy](https://github.com/ccch1mneyyy)）
+- 包名：`dsh-working-activity`
+- 许可证：BSD-3-Clause
+- 当前目标宿主线：DSH `0.2.x`（`0.2.0-rc.2` / `0.2.1-rc.2`）；向下兼容 `0.1.7-rc.2`、`0.1.2-alpha.2`、`0.1.0-rc.6`
 
-> 版权归作者本人所有。社区发布，非 DeepSeek 官方项目。
+npm 包 README（功能、配置、契约的权威文本）：[英文](../packages/activity/working-activity/README.md) / [中文](../packages/activity/working-activity/README.zh.md)。
 
 ## 特性
 
-- **实时状态行**：由会话事件（`turn/start`、`assistant/chunk`、`tool/call`、`tool/result`、`turn/end`）与 `agent/status` 驱动状态机（idle / waiting / thinking / tool / done）
-- **趣味文案**：思考/等待/收尾/失败/深夜五个文案池，思考超时分档（30s / 1m / 5m），全部可关（`phrases: false` 变朴素标签）
-- **模型自述（narrate）**：注入约定，模型在正文首行写 `⏵ 你正在做什么`；实时展示在状态行，聊天正文自动过滤该行（日志保留）
-- **收尾统计**：`turn/end` 后展示 `搞定 ✓ · N 工具 · 想Xs 干Ys` + token 用量（灰条，仅 done 阶段）
-- **两个出口**：Web UI（`conversation.input.dock` 工作状态行，slot 插件，零官方源码改动；数据走 **session projection**，不写会话日志）+ dsh-cc 状态栏（消费 `activity/status` 事件流，渲染动画指示器 / 流光文案 / 上下文预警）
+- **四相位状态行**：`waiting` / `thinking` / `tool` / `done`；思考文案轮换、长思考分档（30s / 1m / 5m）、深夜、周末、节假日、稀有彩蛋、工具连击、模型切换梗与失败文案。
+- **真实工具活动**：运行中的工具显示 `动词 + 参数细节 + 已耗时`；`tool/result` 按精确 call id 与 `tool/call` 配对；失败工具显示 `✗` 与失败文案。
+- **收尾统计**：`turn/end` 后显示 `搞定 ✓ · N 工具 · 想Xs 干Ys`，并短暂钉住最后一个工具片段。
+- **模型自述**：`narrate: true` 时注入 `⏵` 约定，实时提取并展示；聊天正文是否隐藏该行由界面决定，日志保留。
+- **双语与特性开关**：`lang: auto | zh | en`；`mode: minimal` 或逐特性 `features` 开关。
+- **两条出口**：`workingActivity` 会话投影（TUI / Web UI / GUI，不写日志）；可选的工作状态日志记录（`publish: true`，供日志重放型消费者；`0.2.x` 上是 ignorable 的 `plugin:working-activity/status` 记录，旧线降级为 legacy `activity/status` 事件）。
 
 ## 目录结构
 
 ```
-packages/activity/working-activity/   插件本体（cordis 宿主插件源码 + 测试 +
-                                      cordis.patch.yml 自挂载 bundle patch）
-packages/activity/working-activity/   Web UI slot 插件（src/client/：入口 + WorkingLine
-  src/client/                         组件 + CSS，经官方槽位机制挂载；数据来自宿主的
-                                      workingActivity session projection，不写日志）
+packages/activity/working-activity/
+  src/index.ts              插件入口：行配置、每会话 runtime、prompt 槽位、
+                            自述段、发布出口
+  src/status.ts             纯 ActivityTracker 状态机与渲染器
+  src/phrases.ts            双语文案池
+  src/frames.ts             帧预设（与 dsh-tui 共享）
+  src/lang.ts               语言解析与文案字典
+  src/config.ts             文件式配置解析器（dsh-tui 复用）
+  src/projection.ts         workingActivity 会话投影
+  src/events.ts             activity/status 事件 + plugin-record 类型合并
+  src/registration.ts       旧走廊的会话事件类型注册垫片
+  src/invariant.ts          可选的 dsh-invariants 伴生插件
+  src/compat/               宿主载荷形状适配（session events / stream / tool result）
+  src/client/               Web 客户端条目、WorkingLine 组件、本地耗时重算
+  cordis.patch.yml          自挂载 bundle patch
+
+packages/activity/working-activity-alpha2-compat/   0.1.2-alpha.2 隔离夹具
+packages/activity/working-activity-rc2-compat/      0.2.1-rc.2 隔离夹具
 ```
 
 ## 安装
 
-前置：官方 `dsh` CLI（`npm install -g @deepseek-ai/dsh`）与 `pnpm`（`dsh plugin`
-把安装转发给 pnpm）。
+前置：官方 `dsh` CLI 与 `pnpm`（`dsh plugin` 把安装转发给 pnpm）。
 
-### 1. 安装到 profile
+### 安装到 profile
 
 ```sh
-dsh plugin --profile <你的 profile> add dsh-working-activity
+dsh plugin --profile <profile> add dsh-working-activity
 ```
 
-本包自带 `dsh.bundle.patch`（自挂载 bundle）：`add` 会在 profile 内
-`pnpm add` 安装，随后 CLI 的 reconcile 步骤检测到本包的 bundle 声明，自动把
-它追加进 profile 的 `dsh.profile.bundles` 层列表；启动时本包的
-`cordis.patch.yml` 会把自己 insert 进组合树——**无需任何手动挂载**。
+本包自带 `dsh.bundle.patch`（自挂载 bundle）：`add` 会在 profile 内执行 `pnpm add`，CLI 的 reconcile 步骤检测到 bundle 声明后，把包追加进 profile 的 `dsh.profile.bundles`。启动时，本包的 `cordis.patch.yml` 把自己 insert 进组合树，无需手动挂载。
 
-> 注意：等价的手动方式是 `cd $DSH_HOME/profiles/<你的 profile> && pnpm add
-> dsh-working-activity`，但 reconcile（把包追加进 `dsh.profile.bundles`）只
-> 在 `dsh plugin` 命令里发生，手动 pnpm add 后需要自己把包名加进该 profile
-> 的 `package.json` 的 `dsh.profile.bundles` 列表——直接用 `dsh plugin` 更省事。
+等价的手动方式是 `cd $DSH_HOME/profiles/<profile> && pnpm add dsh-working-activity`，但 reconcile 只在 `dsh plugin` 命令里发生；手动安装后需要自己把包名加进 profile `package.json` 的 `dsh.profile.bundles` 列表。直接用 `dsh plugin` 更省事。
 
-源码方式（仅限 DSH monorepo 内开发调试）：把 `packages/activity/working-activity/`
-整个目录复制到 monorepo 同路径，`pnpm install` 后即可被 workspace 解析。
+### 覆盖配置
 
-### 2. Web 端（当前宿主线 0.1.7-rc.2，可选）
-
-Web 端只有一段：**slot 插件随本包 npm 分发**（`lib/client.js`），web 宿主启动时经官方
-client-modules 机制自动挂载到 `conversation.input.dock` 槽位，无需手改 ui-conversation，
-也**不需要任何官方源码补丁**。
-
-数据通道是 **session projection**：宿主半把每个已提交事件折叠成 `workingActivity` 投影值
-（phase / line / 工具数 / 时间戳），经 projection store 下发给客户端；浏览器侧用 session
-标准 kit 的 `useProjection('workingActivity')` 读取，值为 `undefined`、phase 为 `idle`、
-或 `line` 为空时渲染空。由此：
-
-- **不写会话日志**：Web 端不需要 `publish: true`，也不会因此让日志不可恢复。
-- **runtime 补丁已退役**：早期版本要求打过补丁的 `@deepseek-ai/dsh-client-runtime`
-  （把 `activity/status` 事件搬到 `ConversationSnapshot.activity`）。该包冻结在
-  `0.1.1-rc.2` 且不在当前宿主线里；本包不再声明它，那段声明合并也已删除。
-- **秒数按事件刷新**：`line` 是宿主折叠时的原文，长工具跑着时可能滞后到下一个事件；
-  客户端本地滴答（基于值里的 `phaseStartedAt` / `turnStartedAt`）是已知后续项。
-
-### 3. 启用插件
-
-装好后无需手动挂载：`dsh --profile <你的 profile>` 启动时本包的 bundle patch
-会把自己挂进树。想调参时在该 profile 的用户补丁层
-`$DSH_HOME/profiles/<你的 profile>/cordis.patch.yml`（顶层 YAML 数组，
-`!!js` 可用）里按 id 覆盖 config——**不要再 insert 同名行**：
+在该 profile 的用户补丁层 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`（顶层 YAML 数组）里按 id 覆盖 config，**不要 insert 同名行**：
 
 ```yaml
 - id: working-activity
   config:
-    publishIntervalMs: 500   # 状态快照发布间隔（越小越跟手）
+    publishIntervalMs: 500
+    tickMs: 250
 ```
 
-**dsh-cc 效果**：装好
-[dsh-cc-tui](https://github.com/ccch1mneyyy/dsh-cc-tui)（`dsh plugin --profile cc-tui add dsh-cc-tui`）
-后同装本插件即可——cc-tui 状态栏第三行消费 `activity/status` 事件，渲染动画
-指示器（28 预设，`config.activityFrames`）、白色流光文案、`⚠` 上下文预警与
-`⏵` 自述，聊天正文自动过滤 `⏵` 行。建议把 `publishIntervalMs` 调到 `500`
-让状态栏秒数跳动跟手；**推荐安装顺序是先 add 本包、再 add dsh-cc-tui**（这样
-cc-tui bundle patch 里对 `working-activity` 行的 `publishIntervalMs: 500`
-覆盖能命中本行；反过来会因行尚未存在而打一条警告后跳过，需自己在用户层
-覆盖）：
+检查组合结果：
 
 ```sh
-dsh plugin --profile cc-tui add dsh-working-activity
-dsh plugin --profile cc-tui add dsh-cc-tui
+dsh --profile <profile> --dump-config
 ```
 
-### 4. 配置
+## 三个界面
 
-| Key | Type | Default | Meaning |
+| 界面 | 传输 | 落点 |
+|---|---|---|
+| TUI（`dsh-tui`） | `workingActivity` 投影 | `dsh-tui` 的 profile 通过 `@deepseek-harness-tui/dsh-tui/working-activity` 挂载本包，固定 `publish: false`，在状态行渲染投影值；同时复用本包的 `./frames` 帧预设与 `./config` 解析器。 |
+| Web UI | `workingActivity` 投影 | `conversation.input.dock` 上的 `WorkingLine` 条目（id `activity`，order `15`），经 session 标准 kit 的 `useProjection('workingActivity')` 读取。 |
+| 桌面 GUI | `workingActivity` 投影 | Tauri GUI 与 Web UI 共用 `platform: "web"` 客户端入口、dock 座位与投影读取；插件运行在内核 Web 客户端（React 18.3.1），peer 同时覆盖 React 18 / 19。 |
+
+### TUI
+
+TUI 支持随 `dsh-tui` 提供：`dsh-tui` 依赖本包，其 profile 通过 `@deepseek-harness-tui/dsh-tui/working-activity` 挂载，固定 `publish: false`，并从投影渲染状态行。把 `dsh-tui` 装进 profile 即可，不要向同一个 profile 再单独 add 本包：
+
+```sh
+dsh plugin --profile <profile> add @deepseek-harness-tui/dsh-tui
+dsh --profile <profile>
+```
+
+插件在宿主组合了 `ctx.tuiPrompt` 服务时还会注册 `${activity}` prompt 值；提供 prompt 模板的宿主可以把它加进 `theme.leftPrompt`：
+
+```yaml
+- id: tui
+  config:
+    theme:
+      leftPrompt: '${cwd}${git/worktree}${activity}${model}${context}'
+```
+
+当前 DSH 线不组合 `tuiPrompt`；在这条线上投影是 TUI 的唯一传输通道，该模板值是惰性的。
+
+### Web UI
+
+Web 端只有一段：客户端条目随 npm 包分发（`lib/client.js`）。Web 宿主启动时，client-module loader 扫描 loader 条目中的 `dsh.client` 声明，把 bundle 交给 shell；条目在 `conversation.input.dock` 上注册，渲染为 composer 卡片上方的一行暗色状态：
+
+- 阶段色呼吸标记 + 宿主组合好的整行文案 + 本回合工具数；
+- 首个值到达之前、或相位为 `idle` 时不渲染，不占位；
+- 值为 `live` 时，客户端每秒本地重算耗时片段；片段形状无法识别时回退到宿主原文。
+
+数据通道是 **session projection，不是会话日志**：node 半边把每个已提交事件折叠成 `workingActivity` 投影值，宿主把整个值（相位、`line`、工具数、时间戳）经 projection store 下发给客户端，浏览器用 `useProjection('workingActivity')` 读取。由此：
+
+- **不为 Web UI 写会话日志**：不需要 `publish: true`，不会因为本包让日志不可恢复。
+- **runtime 补丁已退役**：早期版本要求打过补丁的 `@deepseek-ai/dsh-client-runtime`（把 `activity/status` 事件搬到 `ConversationSnapshot.activity`）。该包冻结在 `0.1.1-rc.2` 且不在当前宿主线里；本包不再声明它，`ConversationSnapshot.activity` 的声明合并也已删除。投影是唯一通道。
+- **耗时按事件刷新**：投影只在已提交事件折叠时变化；客户端用值里的 `phaseStartedAt` / `turnStartedAt` 本地重算。
+
+### 桌面 GUI
+
+桌面 GUI（`deepseek-harness-desktop`，Tauri）复用 Web 客户端入口：同一份 `dsh.client` 声明、同一个 `conversation.input.dock` 座位、同一次 `useProjection('workingActivity')` 读取，宿主侧同样是会话投影。要求与 Web UI 一致：组合 conversation / renderer / session 三个 boot row，并让 shell 的模块种子表提供 `react/jsx-runtime`。插件运行在内核 Web 客户端里（当前线是 React 18.3.1），不在 GUI 宿主的 React 树中；peer 范围同时覆盖 18 / 19。
+
+已验证项与限制见 [GUI 兼容性](gui-compatibility.md)。
+
+## 配置
+
+| 键 | 类型 | 默认值 | 含义 |
 |---|---|---|---|
 | `phrases` | `boolean` | `true` | 趣味文案池；`false` 渲染朴素功能标签 |
-| `publish` | `boolean` | `false` | 追加 `activity/status` 会话事件供回放型 UI 消费（如 dsh-cc）；Web UI 走 session projection，不需要它。默认关闭：追加的事件会让会话日志无法恢复 |
+| `publish` | `boolean` | `false` | 追加工作状态日志记录供日志重放型 UI 消费：`0.2.x` 上是 ignorable 的 `plugin:working-activity/status` 记录，旧线降级为 legacy `activity/status` 事件。第一方界面走投影，不需要它 |
 | `tickMs` | `number` | `500` | 状态渲染 tick 间隔（100–5000） |
-| `publishIntervalMs` | `number` | `2000` | 稳定行最小发布间隔（500–30000）；dsh-cc 建议 `500` |
-| `detailLimit` | `number` | `40` | 展示细节最大长度（路径/命令/模式），8–120 |
-| `customActions` | `object` | `{}` | 工具名精确匹配 → 动作文案池 |
+| `publishIntervalMs` | `number` | `2000` | 稳定行最小发布间隔（500–30000） |
+| `detailLimit` | `number` | `40` | 展示细节最大长度（路径 / 命令 / 模式，8–120） |
+| `customActions` | `object` | `{}` | 工具名 → 动作文案池（大小写不敏感） |
 | `narrate` | `boolean` | `true` | 注入 `⏵` 自述约定并实时展示 |
+| `lang` | `'auto' \| 'zh' \| 'en'` | `'auto'` | 文案语言；auto 依次读 `DSH_TUI_LANG`、`~/.dsh-tui/lang.json`、OS locale，最后回退 `zh` |
+| `frames` | `string` | `'moon8'` | 帧预设名（供 UI 消费者读取） |
+| `mode` | `'lively' \| 'minimal'` | `'lively'` | 花哨 / 极简 |
+| `features` | `object` | `{}` | 单特性开关，显式值覆盖 mode 默认 |
+| `customPhrases` | `string[]` | `[]` | 追加思考短语 |
+| `showTokPerSec` | `boolean` | `false` | 流式 `~tok/s` 估算 |
+| `workRemindAt` | `number` | `0` | 累计活跃 N 小时提醒休息（0–24，0 关闭） |
+| `debugLog` | `boolean` | `false` | 渲染行 JSON 追踪日志（`~/.dsh-tui/working-activity-debug.log` 或 `DSH_WORKING_ACTIVITY_DEBUG_LOG`） |
 
-## Web UI 集成（当前宿主线 0.1.7-rc.2 槽位机制）
+`features` 支持：`phrases`、`rareEggs`、`nightPhrases`、`weekend`、`holidays`、`combo`、`failPhrases`、`modelQuips`、`continuePhrases`。
 
-### 挂载机制（调研结论）
+## 投影契约
 
-当前宿主线 web 客户端的客户端模块系统（`@deepseek-ai/dsh-client-modules`）
-自动装配第三方 UI：**不需要改官方源码，也不需要注册中心**。装配链：
+投影键：`workingActivity`。在宿主组合了 `sessionProjections` 服务时注册；没有投影注册表的 profile 会跳过，不报错。
 
+DSH `0.2.x` 的注册定义：
+
+```ts
+{
+  key: 'workingActivity',
+  stateSchema,                  // 持久化折叠状态的校验
+  stateVersion,                 // 持久化缓存失效版本
+  init(header, inheritedEventCount),
+  apply(state, event),          // 纯转换；无关事件返回同一引用
+  wire: { viewSchema, view },   // 客户端值的校验与渲染
+}
 ```
+
+同一个定义对象同时携带旧注册表拼写（顶层 `schema` / `viewSchema` / `view`、零参数 `init`），因此无需运行时版本探测即可注册到四条宿主走廊。宿主提供 `stateOf(session, key)` 时，插件用它叠加只在实时阶段存在的事实（当前 `⏵` 自述、首 token 时刻）；没有该接口的宿主回退到已结算消息携带的自述。
+
+客户端值：
+
+```ts
+interface WorkingActivityView {
+  phase: 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
+  line: string
+  live: boolean
+  label?: string
+  detail?: string
+  phrase?: string
+  toolCount: number
+  phaseStartedAt: number
+  turnStartedAt: number
+  updatedAt: number
+  lang: 'zh' | 'en'
+}
+```
+
+`line` 是宿主折叠时的原文；`live` 表示该值对应的相位仍在进行、客户端可以本地重算耗时；`updatedAt` 是最后一次折叠事件的会话时间，用作新鲜度信号。
+
+## 会话记录契约
+
+`publish: true` 时追加只记日志的工作状态记录。**默认关闭**：第一方 TUI、Web UI 与 GUI 读取投影，只有日志重放型消费者需要它。
+
+**DSH `0.2.x`（`0.2.0-rc.2` / `0.2.1-rc.2`）。** 写入走 `session.appendPluginRecord()`，记录类型 `plugin:working-activity/status`。宿主将其标记为 `ignorable: true`，无法识别的读取方会保留并跳过该记录，不会让会话无法 resume。
+
+**旧走廊（`0.1.0-rc.6` 至 `0.1.7-rc.2`）。** 这些宿主没有 `appendPluginRecord`，插件自动降级为通过 `session.append()` 追加 legacy `activity/status` 事件。该代事件没有 ignorable 标记，因此加载时插件会把类型注册进所有可达的 `dsh-session` 副本（包括 persistence 校验器实际解析到的那份）以保证 resume 与持久化读取可用；注册幂等且无条件执行，也能读取早期 `publish: true` 写下的日志。若读取方解析到插件锚点无法触达的副本，仍存在残余风险；第一方界面不需要开启发布。
+
+两种拼写的载荷相同：
+
+```ts
+{
+  phase: 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
+  line: string
+  label?: string
+  detail?: string
+  phrase?: string
+  toolCount: number
+  turnElapsedMs: number
+  phaseStartedAt: number
+}
+```
+
+两者都不带 `surfaceOp`，都不会进入派生的模型历史。
+
+发布规则：状态行变化立即发布；稳定行最多每 `publishIntervalMs` 重发一次，让长工具的已耗时保持实时而不刷爆日志。可选字段缺省时省略，载荷为无损 JSON。
+
+不变量伴生插件同时校验两种拼写：legacy `activity/status` 事件与当前 `plugin:working-activity/status` 记录。
+
+## 兼容性
+
+| DSH 宿主线 | TUI | Web UI | 桌面 GUI | 验证 |
+|---|---|---|---|---|
+| `0.1.0-rc.6` | 兼容维护¹ | 不支持 | 不支持 | legacy 投影形状测试、类型注册夹具 |
+| `0.1.2-alpha.2` | 兼容维护¹ | 不支持 | 不支持 | `pnpm run test:alpha2` |
+| `0.1.7-rc.2` | 支持 | 支持 | 不适用² | `pnpm run test:rc2` |
+| `0.2.0-rc.2` | 支持 | 支持 | 支持³ | 主测试套件 + RC2 宿主夹具 + client bundle 门禁 + GUI 契约门禁 |
+| `0.2.1-rc.2` | 支持 | 支持 | 支持³ | 主测试套件 + RC2 宿主夹具 + client bundle 门禁 + GUI 契约门禁 |
+
+¹ 为兼容性维护，由隔离夹具 / 形状断言覆盖；主开发树不再针对该线编译。
+² 桌面 GUI 使用 0.2.x 内核线。
+³ 桌面 GUI 复用 Web 入口；GUI `0.22.4` 推荐 DSH `0.2.0-rc.2`，在 peer 范围内。详见 [GUI 兼容性](gui-compatibility.md)。
+
+- TUI 支持取决于 `dsh-tui` 版本的 DSH 适配器；当前 `dsh-tui` 线以 `0.2.x` 为主目标，自行维护活动行 / 投影消费，并以 `publish: false` 挂载本包。
+- Web UI 需要 `0.1.7-rc.2`、`0.2.0-rc.2` 或 `0.2.1-rc.2` 客户端编队。
+- GUI 复用 Web 入口；插件运行在内核 Web 客户端（React 18.3.1），peer 覆盖 React 18 / 19。
+
+### 0.2.x 迁移摘要
+
+| 契约 | 变更 | 本包处理 |
+|---|---|---|
+| session projection 注册 | `stateSchema`、`stateVersion`、`init(header, inheritedEventCount)`、`wire.viewSchema` / `wire.view` | 单一继承定义同时携带新旧拼写 |
+| 投影读接口 | `stateOf(session, key)` 仍存在 | 用于叠加实时自述与首 token 时刻 |
+| 实时流 | `assistant/chunk` 不存在，增量走 `agent/assistant-stream` 帧 | `src/compat/assistant-stream.ts`；旧日志仍按 `assistant/chunk` 重放 |
+| 工具结果 | `message.toolCallId` / `message.isError`（`source.callId` 等价） | `src/compat/tool-result.ts` 分层读取，兼容旧日志的 content block 形状 |
+| 会话日志 | `SessionEvent.ignorable` 与 `appendPluginRecord` / `pluginRecordOf` | 已实现：`0.2.x` 写 ignorable `plugin:working-activity/status` 记录；旧走廊降级 legacy `activity/status` + 类型注册 |
+| TUI 读取 | 无 `tuiPrompt` 服务；投影是唯一通道 | TUI 由 `dsh-tui` 挂载并读取投影 |
+| GUI | Tauri；插件运行在内核 Web 客户端（React 18.3.1），复用 `platform: "web"` 客户端入口 | peer 范围 `^18.2.0 \|\| ^19.0.0` 同时覆盖内核与 GUI 宿主 |
+| 失效项 | `dsh-client-runtime`、`ConversationSnapshot.activity`、`session.events` | 已移除 / 改用 `snapshotEvents()` |
+
+## Web UI 挂载机制
+
+```text
 host Loader 条目（cordis.yml / bundle patch）
-  → 包 package.json 声明 dsh.client: { platform: 'web', ... }
+  → 包 package.json 声明 dsh.client: { platform: 'web', inject: [...] }
   → client-modules 扫描 ctx.loader.entries()，解析 exports["./client"]
   → 组合进 window.__DSH_BOOT__ 图，serve /plugins/<包名>/client.js
   → 浏览器端 ClientModuleSystem 加载 bundle（closure-factory 格式）
@@ -123,115 +253,47 @@ host Loader 条目（cordis.yml / bundle patch）
   → 会话视图 composer 上方渲染工作状态行
 ```
 
-关键约束（官方 `packages/client/modules/src/index.ts` 实现）：
+关键约束：
 
-- **subpath 必须是 `./client`**：client-modules 只解析 `exports["./client"]`
-  （字符串或 `{ default }` 条件形式），其他名字（如 `./webui`）不会被扫到。
-- **必须声明 `dsh.client`**：`platform: 'web'` 必填，`inject` 列出依赖的
-  client 模块（用于组装期依赖图），可选 `immediately` 预取。
-- **bundle 必须是官方 closure-factory 格式**：产物文件调用
-  `window.__ModuleLoader__.load({ id, factory })`，外部依赖经注入的
-  `require` 从平台模块表解析；CSS Modules 内联进 bundle 并自动注入
-  `<style data-plugin>`。普通 tsc 产物不能直接 serve。
-- **平台模块必须保持 external**：`react`、`@deepseek-ai/dsh-client-ui-slots`
-  等是 shell 的冻结模块表条目，第三方 bundle 不得内联（否则运行时 identity
-  分裂）。本包 `tsdown.config.ts` 已镜像官方的 external 表与纯度门。
-- **bundle 缺失会 loud fail**：声明了 `dsh.client` 但 `lib/client.js` 不存在
-  时，client-modules 激活阶段直接抛 `MissingClientBundleError`，web 起不来
-  —— 挂载前务必先构建。
-- **`dsh.client.inject` 只列真实使用的 client 模块**：`@deepseek-ai/dsh-client-ui-conversation`
-  （dock 槽位声明）、`@deepseek-ai/dsh-client-ui-renderer`（`slots` 服务）、
-  `@deepseek-ai/dsh-client-ui-session`（`useProjection` 标准 kit）、
-  `@deepseek-ai/dsh-client-ui-slots`（槽位契约）。名单里点名一个当前宿主线上
-  不存在的包（历史事故：`@deepseek-ai/dsh-client-runtime`）不会报错，只会静默
-  少一条加载边——所以 web 端只在**当前线**上验证。
+- **subpath 必须是 `./client`**：client-modules 只解析 `exports["./client"]`（字符串或 `{ default }` 条件形式）。
+- **必须声明 `dsh.client`**：`platform: 'web'`；`inject` 只列真实 boot row（conversation / renderer / session），不是 Cordis 服务注入。
+- **bundle 必须是官方 closure-factory 格式**：产物调用 `window.__ModuleLoader__.load({ id, factory })`；CSS Modules 内联并自动注入 `<style data-plugin>`。
+- **平台模块必须保持 external**：RC2 shell 的种子表是 `react`、`react/jsx-runtime`、`react-dom`、`@deepseek-ai/cordis`、`zod`、`@tanstack/react-virtual`、`@deepseek-ai/dsh-client-store`、`-ui-slots`、`-ui-primitives`、`-ui-dockkit`。第三方 bundle 不得内联平台模块，否则运行时 identity 分裂。
+- **bundle 缺失会 loud fail**：声明了 `dsh.client` 但 `lib/client.js` 不存在时，激活阶段抛 `MissingClientBundleError`。
 
-### 本包已交付的接入件
+## 开发与测试
 
-| 文件 | 作用 |
-|---|---|
-| `src/client/index.ts` | slot 插件入口：`apply(ctx)` 注册
-  `conversation.input.dock` 条目（id `activity`，order 15，goal 条与 queue 行
-  之间），声明 `inject: ['slots']` |
-| `src/client/WorkingLine.tsx` | 工作状态行组件：经 session 标准 kit 的
-  `useProjection('workingActivity')` 读投影值；值为 `undefined` / idle / 空行
-  不渲染；waiting/thinking/tool 呼吸动画指示器 + 状态行 + 工具计数徽标，
-  done 稳态品牌色。`line` 按宿主原文渲染，不做本地滴答 |
-| `src/client/WorkingLine.module.css` | 行/指示器/徽标样式（设计 token：
-  `--dsw-alias-*`、`--dsh-composer-card-max-width`） |
-| `src/client/activity.ts` | `workingActivity` 投影键的声明合并（对
-  `@deepseek-ai/dsh-session-projection/types` 的 `SessionProjectionMap`）+ 键常量；
-  视图类型以 **type-only** 方式复用宿主半的 `WorkingActivityView`（值导入会把
-  宿主的 zod/node 代码拖进浏览器 bundle，被纯度门拦下） |
-| `tsdown.config.ts` | client bundle 构建（镜像官方 `clientBundle` 预设：
-  closure-factory banner/footer、平台 external、CSS 内联、纯度门） |
-| `tsconfig.client.json` | client 侧类型编译（jsx/DOM lib，产物
-  `lib/types/client/`）；因上面的 type-only 导入会带进宿主类型图，program 需要
-  node 类型（浏览器纯度由 bundle 纯度门 + `scripts/verify-client-bundle.mjs` 保证） |
-| `scripts/verify-client-bundle.mjs` | 无浏览器 bundle 门禁：loader banner、
-  require/import 说明符 ⊆ 平台 seed 表、stub `window`/cordis ctx 下 dock 条目
-  注册形状、以及 `useProjection` 读取与三种"渲染空"分支 |
+```sh
+cd packages/activity/working-activity
+pnpm install --frozen-lockfile
+pnpm run build              # host tsc + client tsc，产物进 lib/types/
+pnpm run build:client       # 浏览器 bundle，产物 lib/client.js
+pnpm test                   # 单元 + Host 集成测试
+pnpm run verify:deps        # manifest 依赖门禁
+pnpm run verify:lockfiles   # lockfile 一致性门禁
+pnpm run verify:host-vocabulary
+pnpm run verify:client-bundle
+pnpm run verify:gui         # 桌面 GUI 契约（GUI 检出不存在时跳过）
+pnpm run prepublishOnly     # 全部发布门禁
+pnpm run test:alpha2        # 0.1.2-alpha.2 隔离夹具
+pnpm run test:rc2           # 0.2.1-rc.2 隔离夹具
+```
 
-### 挂载步骤（用户视角）
-
-1. **装包**（已有 profile 则跳过）：
-   `dsh plugin --profile <你的 profile> add dsh-working-activity`
-2. **构建 bundle**：`npm run build:client`（产出 `lib/client.js`；包内
-   `npm run build` 已串起 host + client 两侧 tsc，`build:client` 出浏览器
-   bundle）。发布包需把 `lib/client.js` 一并带上（`files` 已含 `lib`）。
-   `npm run verify:client-bundle` = 先构建再跑无浏览器门禁。
-3. **确保 host 的 web 组合树有本包声明的 client 模块**：`dsh web` 的 profile 需
-   装配 `@deepseek-ai/dsh-client-ui-conversation`、`dsh-client-ui-renderer`、
-   `dsh-client-ui-session`、`dsh-client-ui-slots` 与 `dsh-session-projection`
-   （官方 web-app bundle 默认包含；`dsh.client.inject` 已在 package.json 声明）。
-   这些 peer 的区间是 `^0.1.7-rc.2`（当前客户端线）。
-4. **验收**：`dsh web` 打开会话页，模型干活时 composer 卡片上方出现
-   状态行（阶段色呼吸点 + 文案 + 工具徽标），回合结束变稳态摘要。首次提交事件
-   之前、以及 idle 阶段，该行不占位。
-
-### 与旧补丁的关系 / 取舍
-
-- 旧补丁直接改 `ui-conversation` 源码（TurnStatus 回合标签 + WorkingLine
-  dock 行），每版官方更新都要重打；slot 插件只贡献注册，官方槽位机制
-  自动装配，**升级零冲突**。
-- **不做 `conversation.chat.turnTail` 回合标签**：该链槽位的 `select` 只
-  能基于回合 owner（Turn/seq）派生匹配，而 activity 是会话级节流快照，
-  不绑定具体回合节点，强行接入只能"永远匹配 + 组件内再判空"，违反官方
-  "先派生匹配再挂载"的链槽准则；且 done 摘要放在 dock 行已覆盖同一信息
-  （旧补丁的 WorkingLine 也是只渲染 done 摘要）。需要回合级收尾标签时
-  应由消息域事件（而非 activity 流）驱动。
+主开发树钉在 DSH `0.2.1-rc.2`（Cordis 4.0.5）。`test:alpha2` / `test:rc2` 各自使用独立 fixture 与锁文件加载已发布的 Host 图，避免把互斥 peer 图混装。父包重建后必须重装夹具（`pnpm run test:rc2` 已包含两步）。
 
 ## 隐私与安全
 
-- 插件**不采集、不上传任何数据**。全部状态由本机会话事件推导：Web 端走
-  session projection（宿主内存里的投影值，**不写日志**），`activity/status`
-  仅在显式开启 `publish` 时写入本地会话日志（log-only 事件，模型不可见，回放忽略）。
-- 无网络请求、无遥测、无外部依赖注入；`customActions`/文案池只存在你的本地配置里。
-- 许可证：BSD-3-Clause（见插件包 `package.json`；本仓库说明文档 MIT）。
+- 插件不采集、不上传任何数据；状态全部由本机会话事件推导。
+- Web / GUI 走 `workingActivity` 会话投影（宿主内存中的投影值，不写日志）。
+- `publish: true` 时写入本地会话日志：`0.2.x` 上是 ignorable 的 `plugin:working-activity/status` 记录，旧线是只记日志的 `activity/status` 事件；两者模型均不可见，回放忽略。
+- 无网络请求、无遥测；`customActions` 与文案只存在本地配置里。
+- 许可证：BSD-3-Clause。
 
 ## 已知限制
 
-- 单一状态行：每会话一条，Web/终端消费端显示最近活跃会话。
+- 单一状态行：每会话一条，界面显示最近活跃会话。
 - 无进度百分比：DSH 没有工具进度事件，长工具只显示已耗时。
-- 无动画帧：事件载荷为静态文本片段（dsh-cc 渲染侧自带动画指示器与流光）。
-- Web 单入口：`conversation.input.dock` 状态行覆盖全部阶段（waiting /
-  thinking / tool / done），无回合级标签（取舍见「Web UI 集成」）。
-- Web 秒数按事件刷新：`line` 是宿主折叠时的原文，长工具运行中可能滞后到下一个
-  已提交事件；客户端本地滴答是已知后续项（值里带 `phaseStartedAt` /
-  `turnStartedAt`），本轮**不做**本地格式化或解析 `line`。
-
-## 开发
-
-```sh
-pnpm install && pnpm run build   # 构建（host tsc + client tsc，产物进 lib/）
-pnpm run build:client           # 构建浏览器 bundle（tsdown → lib/client.js）
-pnpm run verify:client-bundle   # 上面的构建 + 无浏览器 bundle 门禁
-pnpm test                        # 单元测试 + Host 集成测试
-pnpm run test:alpha2             # 隔离的 DSH 0.1.2-alpha.2 Host 集成测试
-pnpm run test:rc2                # 隔离的 DSH 0.1.7-rc.2 Host 集成测试
-```
-
-> 主开发树保留 rc.6 Host 基线（host 侧 dev/peer 不变）；Web 半边声明的是当前
-> 客户端线 `^0.1.7-rc.2`。`test:alpha2` / `test:rc2` 各自使用独立 fixture 与
-> 锁文件加载已发布的 Host 图，避免把互斥 peer 图混装。不再需要 DSH 源码
-> workspace 链接。
+- 无动画帧：投影载荷是静态文本；指示器动画由 `dsh-tui` / Web 组件各自实现。
+- Web 单入口：`conversation.input.dock` 状态行覆盖全部相位，无回合级标签。
+- Web / GUI 的耗时由客户端本地重算；片段形状变化时回退到宿主原文，可能短暂滞后。
+- 不变量伴生插件不会自动挂载：需要在 profile 用户层显式插入 `invariants` 与 `working-activity-invariant` 两行。

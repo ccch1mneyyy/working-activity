@@ -1,6 +1,7 @@
 /**
- * Invariant-companion tests: the `activity/status` payload contract and the
- * already-loaded-session scan. That scan is the regression this file exists
+ * Invariant-companion tests: the working-activity payload contract (both the
+ * legacy `activity/status` event and the current ignorable plugin record) and
+ * the already-loaded-session scan. That scan is the regression this file exists
  * for — the companion read `session.events`, an accessor the DSH `0.1.7-rc.2`
  * line no longer has, so installing it threw `TypeError` on the first
  * non-empty session. Both measured read shapes are physical fixtures (each
@@ -50,7 +51,7 @@ const UNRELATED_TYPES = ['turn/start', 'tool/result', 'assistant/chunk', 'sessio
 const JUNK_SNAPSHOT = { phase: 'bogus', line: '', toolCount: -1 }
 
 /**
- * A session as the DSH `0.1.7-rc.2` line presents it: the log is reachable only
+ * A session as the `0.1.7-rc.2`+ lines present it: the log is reachable only
  * through `snapshotEvents()`. The absent `events` key is the point — this is
  * the shape the previous unconditional read crashed on.
  */
@@ -59,8 +60,8 @@ function snapshotSession(events: readonly SessionEvent[]): Session {
 }
 
 /**
- * A session as the DSH `0.1.0-rc.6` line presents it (the line this package
- * still compiles against): the log is the `events` accessor only.
+ * A session as the legacy `0.1.0-rc.6` line presents it: the log is the
+ * `events` accessor only.
  */
 function accessorSession(events: readonly SessionEvent[]): Session {
   return { events } as unknown as Session
@@ -71,9 +72,20 @@ function eventOf(type: string, data: unknown): SessionEvent {
   return { type, seq: 7, time: 1_700_000_000_000, data } as unknown as SessionEvent
 }
 
-/** One `activity/status` event as the plugin publishes it (log-only, no surface op). */
+/** One `activity/status` event as older corridors publish it (log-only, no surface op). */
 function statusEvent(data: unknown): SessionEvent {
   return eventOf('activity/status', data)
+}
+
+/** One current ignorable plugin record, as `appendPluginRecord()` writes it. */
+function pluginRecordEvent(data: unknown): SessionEvent {
+  return {
+    type: 'plugin:working-activity/status',
+    seq: 8,
+    time: 1_700_000_000_000,
+    data,
+    ignorable: true,
+  } as unknown as SessionEvent
 }
 
 /** Whether one key is an own property, so a fixture's shape is a physical fact. */
@@ -252,6 +264,36 @@ describe('activity/status payload contract', () => {
       'activity/status line must be a non-empty string',
       'activity/status toolCount must be a non-negative finite number',
     ])
+  })
+})
+
+describe('plugin-record payload contract', () => {
+  it('accepts a complete plugin record', async () => {
+    const mounted = await mount()
+    mounted.append(pluginRecordEvent(VALID))
+    expect(mounted.failures).toEqual([])
+  })
+
+  it('rejects a malformed plugin record with the same rule messages', async () => {
+    const mounted = await mount()
+    mounted.append(pluginRecordEvent({ ...VALID, phase: 'paused', line: '' }))
+    expect(mounted.failures).toEqual([
+      'activity/status carries unknown phase "paused"',
+      'activity/status line must be a non-empty string',
+    ])
+  })
+
+  it('ignores a plugin-typed event that is not marked ignorable', async () => {
+    const mounted = await mount()
+    const notIgnorable = { ...pluginRecordEvent({ ...VALID, phase: 'paused' }) } as Record<string, unknown>
+    delete notIgnorable.ignorable
+    mounted.append(notIgnorable as unknown as SessionEvent)
+    expect(mounted.failures).toEqual([])
+  })
+
+  it('validates a loaded plugin record in the boot-time scan', async () => {
+    const mounted = await mount([snapshotSession([pluginRecordEvent({ ...VALID, toolCount: -1 })])])
+    expect(mounted.failures).toEqual(['activity/status toolCount must be a non-negative finite number'])
   })
 })
 

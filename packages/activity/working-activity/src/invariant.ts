@@ -1,10 +1,15 @@
 /**
- * Package-owned `activity/status` snapshot invariants.
+ * Package-owned working-activity snapshot invariants.
+ *
+ * Validates both durable spellings: the legacy `activity/status` session event
+ * (pre-0.6 publish path, still readable on old corridors) and the current
+ * ignorable `plugin:working-activity/status` record.
  * @module dsh-working-activity/invariant
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import * as dshSession from '@deepseek-ai/dsh-session'
 import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
 /** Cordis companion plugin name. */
@@ -13,7 +18,13 @@ export const name = 'working-activity-invariant'
 export const inject = ['invariants']
 
 const PACKAGE_NAME = 'dsh-working-activity'
+const PLUGIN_RECORD_TYPE = 'plugin:working-activity/status'
 const PHASES = new Set(['idle', 'waiting', 'thinking', 'tool', 'done'])
+
+/** Record reader on the current host line; absent on older corridors. */
+const pluginRecordOf = (dshSession as {
+  pluginRecordOf?: (event: SessionEvent) => { type: string; data: unknown } | undefined
+}).pluginRecordOf
 
 /** Validate one published activity snapshot before it reaches the durable log. */
 function validateStatus(data: unknown, fail: InvariantFailure): void {
@@ -42,9 +53,16 @@ function validateStatus(data: unknown, fail: InvariantFailure): void {
 }
 
 /* jscpd:ignore-start -- package companions share replay and dispatch plumbing */
-/** Validate the package-owned event shape and ignore unrelated events. */
+/** Validate the package-owned snapshot shape and ignore unrelated events. */
 function validateEvent(event: SessionEvent, fail: InvariantFailure): void {
-  if (event.type === 'activity/status') validateStatus(event.data, fail)
+  const eventType: string = event.type
+  if (eventType === 'activity/status') {
+    validateStatus(event.data, fail)
+    return
+  }
+  if (pluginRecordOf === undefined) return
+  const record = pluginRecordOf(event)
+  if (record?.type === PLUGIN_RECORD_TYPE) validateStatus(record.data, fail)
 }
 
 /**
@@ -53,15 +71,15 @@ function validateEvent(event: SessionEvent, fail: InvariantFailure): void {
  * both stay optional and the scan probes rather than pinning a version:
  * `snapshotEvents()` is what every first-party companion seeds from
  * (`@deepseek-ai/dsh-session/lib/invariant.js` seeds each `ctx.sessions.list()`
- * entry through it), while the `0.1.0-rc.6` line this package still compiles
- * against exposes only the `events` accessor. On the `0.1.7-rc.2` line that
- * accessor is gone, which is how the previous unconditional `session.events`
- * read threw `TypeError` on the first non-empty session.
+ * entry through it), while the legacy `0.1.0-rc.6` line exposes only the
+ * `events` accessor. On `0.1.7-rc.2` and later that accessor is gone, which is
+ * how the previous unconditional `session.events` read threw `TypeError` on
+ * the first non-empty session.
  */
 interface LoadedSession {
-  /** Full immutable log snapshot (`0.1.7-rc.2` line and later). */
+  /** Full immutable log snapshot (`0.1.7-rc.2` and later). */
   snapshotEvents?: () => readonly SessionEvent[]
-  /** Full immutable log accessor (`0.1.0-rc.6` line). */
+  /** Full immutable log accessor (legacy `0.1.0-rc.6` line). */
   readonly events?: readonly SessionEvent[]
 }
 

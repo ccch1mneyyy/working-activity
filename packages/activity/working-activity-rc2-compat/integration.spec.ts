@@ -1,22 +1,28 @@
 /**
- * DSH `0.1.7-rc.2` host integration fixture.
+ * DSH `0.2.1-rc.2` host integration fixture.
  *
  * This file mounts the REAL host in-process — `Context`, the agent-loop
  * testkit prerequisites, the real `AgentLoop`, the packaged
  * `dsh-working-activity` plugin, and a scripted mock adapter — then runs real
- * turns. It answers three questions:
+ * turns. It answers four questions:
  *
  * 1. **Scope probe.** Does a plugin mounted through `ctx.plugin(...)` (the way
  *    any third-party plugin is mounted) actually receive the transient
  *    `agent/assistant-stream` frames of the current host, or only a listener on
- *    the root context? Zero frames at either level is a critical finding.
- * 2. **P0 reproduction.** With `dsh-working-activity@0.4.0` on this host the
- *    tool phase must never settle: `tool/result` carries its call id on
- *    `message.source.callId` while the tracker reads
- *    `message.content[0].toolCallId`, so the status line stays pinned on the
- *    turn's first tool until `turn/end` and the done line counts 0 tools. These
- *    cases are expected RED until `src/` is migrated; the failure is the point.
- * 3. **Fixture honesty.** `fixtures.ts` encodes both wire generations, and the
+ *    the root context? Zero frames at either level is a critical finding. The
+ *    frames themselves are checked against the 0.2.x contract: per-attempt
+ *    `start` / dense `chunk`* / `end`, with an attempt id and monotone revision
+ *    on every frame.
+ * 2. **P0 regression guard.** `tool/result` carries its call id on
+ *    `message.source.callId` (with a sibling `message.toolCallId`), never on
+ *    `message.content[0].toolCallId`. These cases were RED for
+ *    `dsh-working-activity@0.4.0`; they stay as the guard that the tracker
+ *    settles the tool phase before `turn/end` and the done line counts it.
+ * 3. **RC2 session seams.** This host line removed the live `session.events`
+ *    read and added `appendPluginRecord` / `pluginRecordOf` over the
+ *    `ignorable` envelope marker; `snapshotEvents()` is the surviving log read.
+ *    All three are exercised here, plus the 0.2.1 event vocabulary.
+ * 4. **Fixture honesty.** `fixtures.ts` encodes both wire generations, and the
  *    assertions there prove neither generation leaks into the other, so a later
  *    "just put both in" edit cannot pass silently.
  * @module dsh-working-activity-rc2-compat/integration.spec
@@ -27,7 +33,17 @@ import type { Agent, AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { KNOWN_SESSION_EVENT_TYPES, SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+import {
+  KNOWN_SESSION_EVENT_TYPES,
+  SessionId,
+  appendPluginRecord,
+  deriveEventMessage,
+  pluginRecordOf,
+  snapshotSessionEvent,
+  type Session,
+  type SessionEvent,
+  type SessionSeq,
+} from '@deepseek-ai/dsh-session'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import { describe, expect, it } from 'vitest'
 import * as WorkingActivity from 'dsh-working-activity'
@@ -39,6 +55,25 @@ import {
   modernToolResult,
 } from './fixtures.ts'
 import { MockAdapter, textResponse, toolCallResponse } from './mock-adapter.ts'
+
+/**
+ * RC2 plugin-record payload the session package's augmented map types here.
+ *
+ * `PluginRecordMap` is empty in `dsh-session` and is the documented merge
+ * target for out-of-repo records (same pattern as the projection maps).
+ */
+declare module '@deepseek-ai/dsh-session/types' {
+  interface PluginRecordMap {
+    /** Synthetic record used only by this fixture to prove the channel. */
+    'plugin:working-activity/rc2-probe': { readonly probe: string }
+  }
+}
+
+/** The RC2 plugin-record type this fixture appends. */
+const PLUGIN_RECORD_TYPE = 'plugin:working-activity/rc2-probe'
+
+/** The RC2 ignorable plugin-record type the plugin publishes its snapshots under. */
+const ACTIVITY_RECORD_TYPE = 'plugin:working-activity/status'
 
 /** Call id shared by the scripted tool call and the fixture/assertion pairs. */
 const CALL_ID = 'rc2-call-1'
@@ -159,11 +194,22 @@ async function runToolTurn(ctx: Context, sessionId: string, prompt = 'list files
   return agent
 }
 
-/** Select the working-activity snapshots from a session transcript. */
+/**
+ * Select the working-activity published snapshots from a session transcript.
+ *
+ * On DSH 0.2.x the plugin's `publish: true` sink writes an ignorable
+ * `plugin:working-activity/status` record instead of the legacy
+ * `activity/status` event (the legacy event remains declared so older logs
+ * still replay). The payload is read back through `pluginRecordOf()`.
+ * @param log - durable events in commit order.
+ * @returns the published snapshot payloads, in commit order.
+ */
 function activitySnapshots(log: readonly SessionEvent[]): ActivitySnapshot[] {
-  return log
-    .filter(event => event.type === 'activity/status')
-    .map(event => event.data as unknown as ActivitySnapshot)
+  return log.flatMap((event) => {
+    const record = pluginRecordOf(event)
+    if (record?.type !== ACTIVITY_RECORD_TYPE) return []
+    return [record.data as ActivitySnapshot]
+  })
 }
 
 /** Count one recording's frames by type. */
@@ -178,6 +224,30 @@ function frameCounts(frames: readonly AssistantStreamFrame[]): FrameCounts {
 /** Distinct attempt ids seen in one recording. */
 function attemptIds(frames: readonly AssistantStreamFrame[]): string[] {
   return [...new Set(frames.map(frame => String(frame.attemptId)))].sort()
+}
+
+/**
+ * Assert the 0.2.x `agent/assistant-stream` frame contract for one attempt:
+ * exactly one `start`, dense zero-based chunk indexes in publication order,
+ * monotone unique revisions, and one terminal `end` whose index is the chunk
+ * count. Chunk frames additionally carry their own `time` and `chunk` payload.
+ * @param frames - frames belonging to exactly one attempt, in publication order.
+ */
+function expectAttemptFrames(frames: readonly AssistantStreamFrame[]): void {
+  const [start] = frames
+  const end = frames.at(-1)
+  expect(start?.type).toBe('start')
+  expect(end?.type).toBe('end')
+  const attemptId = String(start?.attemptId)
+  const chunks = frames.filter(frame => frame.type === 'chunk')
+  expect(frames.filter(frame => frame.type === 'end')).toHaveLength(1)
+  expect(frames.every(frame => String(frame.attemptId) === attemptId)).toBe(true)
+  expect(chunks.map(frame => frame.index)).toEqual(chunks.map((_frame, index) => index))
+  expect(chunks.every(frame => typeof frame.time === 'number' && frame.chunk !== undefined)).toBe(true)
+  const revisions = frames.map(frame => frame.revision)
+  expect(revisions).toEqual([...revisions].sort((a, b) => a - b))
+  expect(new Set(revisions).size).toBe(revisions.length)
+  if (end?.type === 'end') expect(end.index).toBe(chunks.length)
 }
 
 /** Mount the plugin, run one scripted turn, and collect its snapshots. */
@@ -205,7 +275,7 @@ async function runActivityTurn(
   }
 }
 
-describe('DSH 0.1.7-rc.2 compatibility', () => {
+describe('DSH 0.2.1-rc.2 compatibility', () => {
   // ---------------------------------------------------------------------------
   // (a) Scope probe — the load-bearing question of the migration.
   // ---------------------------------------------------------------------------
@@ -256,13 +326,25 @@ describe('DSH 0.1.7-rc.2 compatibility', () => {
       expect(counts.start).toBeGreaterThan(0)
       expect(counts.chunk).toBeGreaterThan(0)
       expect(counts.end).toBeGreaterThan(0)
+
+      // The frame vocabulary itself is the 0.2.x contract: one `start` /
+      // `chunk`* / `end` bracket per attempt, each frame carrying its attempt
+      // id and revision. Group by attempt (the tool step and the text step are
+      // two attempts) and assert each bracket independently.
+      const perAttempt = new Map<string, AssistantStreamFrame[]>()
+      for (const frame of probeFrames) {
+        const id = String(frame.attemptId)
+        perAttempt.set(id, [...(perAttempt.get(id) ?? []), frame])
+      }
+      expect(perAttempt.size).toBeGreaterThan(1)
+      for (const attemptFrames of perAttempt.values()) expectAttemptFrames(attemptFrames)
     } finally {
       await ctx.fiber.dispose()
     }
   })
 
   // ---------------------------------------------------------------------------
-  // (b) P0 reproduction with the real host — expected RED on 0.4.0.
+  // (b) P0 regression guard with the real host — was RED on 0.4.0, stays green.
   // ---------------------------------------------------------------------------
   it('P0: the tool phase ends before turn end (a thinking snapshot settles the tool)', async () => {
     const { events, snapshots } = await runActivityTurn('rc2-activity-settle')
@@ -279,6 +361,14 @@ describe('DSH 0.1.7-rc.2 compatibility', () => {
     expect(events.map(event => event.type)).toContain('tool/result')
     expect(toolAt).toBeGreaterThanOrEqual(0)
     expect(doneAt).toBeGreaterThan(toolAt)
+    // The completed-tool counter only moves forward across the turn, and the
+    // running tool is not counted until its `tool/result` settles it: every
+    // `tool` snapshot shows 0, the settlement snapshot shows 1.
+    const toolCounts = snapshots.map(snapshot => snapshot.toolCount)
+    expect(toolCounts).toEqual([...toolCounts].sort((a, b) => a - b))
+    expect(snapshots.filter(snapshot => snapshot.phase === 'tool').every(snapshot => snapshot.toolCount === 0))
+      .toBe(true)
+    expect(toolCounts.at(-1)).toBe(1)
     // A settled tool drops the tracker back to `thinking` for the rest of the
     // turn; with the call id unread, the only reachable phase after `tool` is
     // `done`, i.e. the status line stays pinned on the first tool until then.
@@ -296,6 +386,35 @@ describe('DSH 0.1.7-rc.2 compatibility', () => {
     expect(done).toBeDefined()
     expect(done?.toolCount).toBe(1)
     expect(done?.line).toContain('1 工具')
+  })
+
+  // ---------------------------------------------------------------------------
+  // Publish sink: on RC2 `publish: true` writes an ignorable plugin record
+  // instead of the legacy `activity/status` event, so an old reader keeps the
+  // log resumable. The legacy sink survives only as the pre-0.2 fallback.
+  // ---------------------------------------------------------------------------
+  it('publishes through the RC2 ignorable plugin record, not legacy activity/status', async () => {
+    const { events } = await runActivityTurn('rc2-publish-record')
+    const records = events.filter(event => pluginRecordOf(event)?.type === ACTIVITY_RECORD_TYPE)
+    const legacy = events.filter(event => event.type === 'activity/status')
+    console.log(`[rc2 publish] plugin records=${records.length} legacy activity/status rows=${legacy.length}`)
+
+    expect(legacy).toHaveLength(0)
+    expect(records.length).toBeGreaterThan(0)
+    for (const event of records) {
+      // The envelope marker is what keeps a write by a newer harness readable
+      // by an older one; the type itself is outside the released catalog.
+      expect(event.ignorable).toBe(true)
+      expect(KNOWN_SESSION_EVENT_TYPES.has(event.type)).toBe(false)
+      // A published snapshot never enters derived model history.
+      expect(deriveEventMessage(event)).toBeNull()
+    }
+    const first = records[0]
+    if (first === undefined) throw new Error('unreachable: records asserted non-empty')
+    const payload = pluginRecordOf(first)?.data as (ActivitySnapshot & { turnElapsedMs?: unknown }) | undefined
+    expect(typeof payload?.phase).toBe('string')
+    expect(typeof payload?.toolCount).toBe('number')
+    expect(typeof payload?.turnElapsedMs).toBe('number')
   })
 
   // ---------------------------------------------------------------------------
@@ -436,9 +555,105 @@ describe('DSH 0.1.7-rc.2 compatibility', () => {
       expect(paths).toContain('data.message.source.callId')
       expect(paths).toContain('data.message.toolCallId')
       expect(paths.filter(isLegacyContentCallId)).toEqual([])
+      // A successful result keeps `isError: false`; the call id lives on both
+      // the tool-call source tag and the message's own field.
+      const message = (results[0]?.data as {
+        message?: { source?: { kind?: string; callId?: unknown }; toolCallId?: unknown; isError?: unknown }
+      }).message
+      expect(message?.source?.kind).toBe('tool')
+      expect(String(message?.source?.callId)).toBe(CALL_ID)
+      expect(String(message?.toolCallId)).toBe(CALL_ID)
+      expect(message?.isError).toBe(false)
     } finally {
       await ctx.fiber.dispose()
     }
+  })
+
+  // ---------------------------------------------------------------------------
+  // RC2 session seams: removed `session.events`, `snapshotEvents()`, and the
+  // new `ignorable` plugin-record channel.
+  // ---------------------------------------------------------------------------
+  it('serves the session log through snapshotEvents() now that session.events is gone', async () => {
+    const ctx = new Context()
+    try {
+      await mountHost(ctx)
+      scriptToolTurn(ctx)
+      const recorder = recordSessionEvents(ctx)
+      const agent = await runToolTurn(ctx, 'rc2-session-read')
+      const session = agent.session
+      const recorded = recorder.eventsOf(session)
+      const snapshot = session.snapshotEvents()
+
+      console.log(`[rc2 read] snapshotEvents=${snapshot.length} recorded=${recorded.length} `
+        + `lastSeq=${String(snapshot.at(-1)?.seq)}`)
+
+      // The live log getter is gone on this host line; the frozen snapshot is
+      // the surviving synchronous read (marked deprecated, still served).
+      expect('events' in session).toBe(false)
+      expect(typeof session.snapshotEvents).toBe('function')
+      expect(snapshot.length).toBe(recorded.length)
+      expect(snapshot.map(event => event.seq)).toEqual(recorded.map(event => event.seq))
+      expect(snapshot.at(-1)?.seq).toBe(session.seq - 1)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('appends and reads back an ignorable plugin record outside the event catalog', async () => {
+    const ctx = new Context()
+    try {
+      await mountHost(ctx)
+      // The record contract needs a live Session; the real AgentLoop is the
+      // supported way to obtain one on this fixture.
+      const agent = await ctx.agentLoop.create(SessionId('rc2-plugin-record'), { provider: 'mock', model: 'mock' })
+      const session = agent.session
+      const before = session.snapshotEvents()
+      const seq = appendPluginRecord(session, PLUGIN_RECORD_TYPE, { probe: 'rc2' })
+      const after = session.snapshotEvents()
+      const event = after.at(-1)
+      const record = event === undefined ? undefined : pluginRecordOf(event)
+      console.log(`[rc2 plugin record] type=${PLUGIN_RECORD_TYPE} `
+        + `seq=${String(seq)} ignorable=${String(event?.ignorable)} record=${JSON.stringify(record)}`)
+
+      expect(after.length).toBe(before.length + 1)
+      expect(event?.type).toBe(PLUGIN_RECORD_TYPE)
+      expect(event?.seq).toBe(seq)
+      // The envelope marker is what makes an unknown type safe to retain: the
+      // record sits OUTSIDE KNOWN_SESSION_EVENT_TYPES and carries `ignorable`.
+      expect(event?.ignorable).toBe(true)
+      expect(KNOWN_SESSION_EVENT_TYPES.has(PLUGIN_RECORD_TYPE)).toBe(false)
+      expect(record).toEqual({
+        type: PLUGIN_RECORD_TYPE,
+        seq,
+        time: event?.time,
+        data: { probe: 'rc2' },
+      })
+      // A record never enters the model-visible surface, and the public
+      // snapshot helper preserves its identity for re-reads.
+      expect(event === undefined ? null : deriveEventMessage(event)).toBeNull()
+      expect(event === undefined ? undefined : pluginRecordOf(snapshotSessionEvent(event))).toEqual(record)
+      // The `plugin:` type grammar is enforced at append, not advisory.
+      const erasedAppend = appendPluginRecord as unknown as
+        (session: Session, type: string, data: unknown) => SessionSeq
+      expect(() => erasedAppend(session, 'working-activity/rc2-probe', {})).toThrow(/plugin:/)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('ships the 0.2.1 session-event vocabulary and still no assistant/chunk', () => {
+    for (const type of [
+      'assistant/attempt',
+      'job/registered',
+      'job/settled',
+      'working-directory/change',
+      'tool/call',
+      'tool/result',
+    ]) {
+      expect(KNOWN_SESSION_EVENT_TYPES.has(type)).toBe(true)
+    }
+    // The durable chunk event the live stream replaced is not coming back.
+    expect(KNOWN_SESSION_EVENT_TYPES.has('assistant/chunk')).toBe(false)
   })
 
   // ---------------------------------------------------------------------------
@@ -475,6 +690,9 @@ describe('DSH 0.1.7-rc.2 compatibility', () => {
     expect(String(modern.message.toolCallId)).toBe(CALL_ID)
     expect(modern.turn).toBe(legacy.turn)
     expect(modern.step).toBe(legacy.step)
+    // `isError` remains the failure flag on both generations.
+    expect(modernToolResult(CALL_ID, 'boom', { isError: true }).message.isError).toBe(true)
+    expect(legacyToolResult(CALL_ID, 'boom', { isError: true }).message.isError).toBe(true)
   })
 
   it('builds well-formed modern assistant-stream frames', () => {
