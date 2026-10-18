@@ -85,9 +85,9 @@ describe('a read is a function of the state', () => {
   })
 
   it('leaves a stable snapshot version for persistent checkpoints', () => {
-    // v6: the live-only `firstTokenAt` joined (the overlay promotes a waiting
-    // fold to thinking); v5 retired the read-side `reminded` flag.
-    expect(TRACKER_SNAPSHOT_VERSION).toBe(6)
+    // v7: the HUD signal state (context pressure, todos, jobs, subagents,
+    // teams, goal, plan) joined the snapshot; v6 added live `firstTokenAt`.
+    expect(TRACKER_SNAPSHOT_VERSION).toBe(7)
   })
 })
 

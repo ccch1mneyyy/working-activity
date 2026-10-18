@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-26 · **Method:** declaration reading + installed-host runtime probes + structural census of real v4 session logs. Read-only except this file.
 
-> **Scope note (historical).** This audit is a snapshot of `dsh-working-activity@0.4.0` against DSH `0.1.7-rc.2`. It is kept as the evidence trail for the 0.1.7 migration; the current package is `0.6.0`, targets DSH `0.2.x`, and the contract changes are summarized in the [RC2 addendum](#addendum-2026-10-19-dsh-02x-rc2) at the end of this file. Read the addendum first for current behavior.
+> **Scope note (historical).** This audit is a snapshot of `dsh-working-activity@0.4.0` against DSH `0.1.7-rc.2`. It is kept as the evidence trail for the 0.1.7 migration; the current package is `0.7.0`, targets DSH `0.2.x`, and the contract changes are summarized in the [RC2 addendum](#addendum-2026-10-19-dsh-02x-rc2) at the end of this file. Read the addendum first for current behavior.
 
 ## Evidence basis (legend)
 

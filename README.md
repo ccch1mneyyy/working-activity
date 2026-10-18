@@ -370,6 +370,7 @@ DSH 版是 DeepSeek Harness 的 cordis 宿主插件，包名 `dsh-working-activi
 - **收尾摘要**：`搞定 ✓ · N 工具 · 想Xs 干Ys`，短暂钉住最后一个工具片段。
 - **模型自述**：`narrate: true` 时注入 `⏵` 约定并实时展示。
 - **双语文案**：中 / 英两套池，`lang: auto | zh | en`，跟随 dsh-tui 的语言链。
+- **紧凑 HUD**：`ctx 62%`（阈值告警）、`2/5 待办`、后台任务、子代理 / Agent Team、目标、计划、排队输入与收尾 token；逐项可关，宿主缺少的信号不显示。
 - **无侵入**：不注册工具、不追加 surface 事件、不进入模型历史。
 
 ## 安装
@@ -408,7 +409,7 @@ Web 端不再需要 `dsh-client-runtime` 补丁：`activity/status` 事件搬运
 | `0.2.0-rc.2` | 支持 | 支持 | 支持（GUI 0.22.4 推荐内核） | 主测试套件、RC2 宿主夹具、client bundle 门禁、GUI 契约门禁 |
 | `0.2.1-rc.2` | 支持 | 支持 | 支持 | 主测试套件、RC2 宿主夹具、client bundle 门禁、GUI 契约门禁 |
 
-说明：TUI 支持取决于 `dsh-tui` 版本的 DSH 适配器；当前 `dsh-tui` 线以 `0.2.x` 为主目标并向下兼容到 `0.1.0-rc.6`。Web UI 需要 `0.1.7-rc.2`、`0.2.0-rc.2` 或 `0.2.1-rc.2` 客户端编队。GUI 复用 Web 入口，详见 `docs/gui-compatibility.md`。
+说明：TUI 支持取决于 `dsh-tui` 版本的 DSH 适配器；当前 `dsh-tui` 线以 `0.2.x` 为主目标并向下兼容到 `0.1.0-rc.6`。Web UI 需要 `0.1.7-rc.2`、`0.2.0-rc.2` 或 `0.2.1-rc.2` 客户端编队。GUI 复用 Web 入口，详见 `docs/gui-compatibility.md`。HUD 信号按日志能力出现：`request/context`、`todo/write`、`goal/change`、`plan/mode`、`team/*`、`subagent/catalog` 在 0.1.2-alpha.2 已有；`job/*` 与 `agent/inbox/spliced` 在 0.1.7+ 线出现（0.1.2-alpha.2 没有）。
 
 ## 配置
 
@@ -428,6 +429,9 @@ Web 端不再需要 `dsh-client-runtime` 补丁：`activity/status` 事件搬运
 | `customPhrases` | `string[]` | `[]` | 追加思考短语 |
 | `showTokPerSec` | `boolean` | `false` | 流式 `~tok/s` 估算 |
 | `workRemindAt` | `number` | `0` | 累计活跃 N 小时提醒休息，0 关闭 |
+| `hud` | `boolean` | `true` | 紧凑 HUD 总开关 |
+| `contextWarnAt` | `number` | `80` | 上下文警告阈值（%） |
+| `contextDangerAt` | `number` | `95` | 上下文危险阈值（%） |
 | `debugLog` | `boolean` | `false` | 渲染行 JSON 追踪日志 |
 
 完整配置说明、投影契约与会话记录契约见[插件包 README](packages/activity/working-activity/README.md)。

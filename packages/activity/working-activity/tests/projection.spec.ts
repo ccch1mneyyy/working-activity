@@ -184,6 +184,13 @@ describe('projection folding', () => {
     expect(view.toolCount).toBe(1)
   })
 
+  it('returns the same state reference for a step opening', () => {
+    const { projection, at } = build()
+    const state = projection.apply(projection.init(), event('turn/start', START, { turn: 1 }))
+    // A step boundary is bookkeeping in the tracker; it must not broadcast.
+    expect(projection.apply(state, event('step/start', at(), { turn: 1, step: 1 }))).toBe(state)
+  })
+
   it('returns the same state reference for an event it does not model', () => {
     const { projection, at } = build()
     const state = projection.apply(projection.init(), event('turn/start', START, { turn: 1 }))
@@ -191,6 +198,32 @@ describe('projection folding', () => {
     // rebuilt state on every durable event would broadcast for nothing.
     expect(projection.apply(state, event('step/end', at(), { turn: 1, step: 1 }))).toBe(state)
     expect(projection.apply(state, event('some/unmodelled', at(), {}))).toBe(state)
+  })
+
+  it('reuses the same wire value when a read does not change it', () => {
+    const { projection, at } = build()
+    const state = projection.apply(projection.init(), event('turn/start', START, { turn: 1 }))
+    const first = projection.view(state)
+    expect(projection.view(state)).toBe(first)
+    expect(projection.view(state)).toBe(first)
+    expect(at()).toBe(START)
+  })
+
+  it('exposes the oldest active tool as toolStartedAt for the client tick', () => {
+    const { projection, tick, at } = build()
+    let state = projection.apply(projection.init(), event('turn/start', START, { turn: 1 }))
+    state = projection.apply(state, event('tool/call', at(), {
+      turn: 1, step: 1, callId: 'a', name: 'bash', arguments: '{"command":"sleep 10"}',
+    }))
+    tick(5_000)
+    state = projection.apply(state, event('tool/call', at(), {
+      turn: 1, step: 1, callId: 'b', name: 'bash', arguments: '{"command":"echo b"}',
+    }))
+    tick(5_000)
+    const value = projection.view(state) as WorkingActivityView
+    expect(value.line).toContain('10s')
+    expect(value.toolStartedAt).toBe(START)
+    expect(value.phaseStartedAt).toBe(START + 5_000)
   })
 
   it('carries the language through to the client', () => {

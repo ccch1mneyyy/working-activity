@@ -163,3 +163,87 @@ describe('model quips', () => {
     expect(restored.render(late).phrase).not.toBe(announced)
   })
 })
+
+describe('HUD signal vocabulary', () => {
+  it('maps request/context to the advertised window', () => {
+    expect(toActivityEvents(event('request/context', START, { contextWindow: 128_000 }))).toEqual([
+      { kind: 'context-window', at: START, window: 128_000 },
+    ])
+    expect(toActivityEvents(event('request/context', START, { contextWindow: 0 }))).toEqual([])
+    expect(toActivityEvents(event('request/context', START, {}))).toEqual([])
+  })
+
+  it('maps todo/write to whole-list counts', () => {
+    expect(toActivityEvents(event('todo/write', START, {
+      todos: [
+        { content: 'a', status: 'completed' },
+        { content: 'b', status: 'in_progress' },
+        { content: 'c', status: 'pending' },
+      ],
+    }))).toEqual([
+      { kind: 'todo-write', at: START, counts: { done: 1, total: 3, inProgress: 1 } },
+    ])
+  })
+
+  it('maps job registration and settlement', () => {
+    expect(toActivityEvents(event('job/registered', START, {
+      jobId: 'bash-1', kind: 'bash', label: 'npm test', startedAt: START,
+    }))).toEqual([{
+      kind: 'job-start', at: START,
+      job: { id: 'bash-1', kind: 'bash', label: 'npm test', startedAt: START },
+    }])
+    expect(toActivityEvents(event('job/settled', START, { jobId: 'bash-1' }))).toEqual([
+      { kind: 'job-end', at: START, jobId: 'bash-1' },
+    ])
+  })
+
+  it('maps subagent catalog, team members and team tasks', () => {
+    expect(toActivityEvents(event('subagent/catalog', START, {
+      childId: 's1', mode: 'continuable', label: 'audit',
+    }))).toEqual([{
+      kind: 'subagent-catalog', at: START,
+      subagent: { id: 's1', mode: 'continuable', label: 'audit' },
+    }])
+    expect(toActivityEvents(event('team/member', START, {
+      member: { id: 'm1', name: 'worker', phase: 'active' },
+    }))).toEqual([{
+      kind: 'team-member', at: START,
+      member: { id: 'm1', name: 'worker', phase: 'active' },
+    }])
+    expect(toActivityEvents(event('team/task', START, {
+      task: { id: 't1', status: 'in_progress', subject: 'fix' },
+    }))).toEqual([{
+      kind: 'team-task', at: START,
+      task: { id: 't1', status: 'in_progress', subject: 'fix' },
+    }])
+  })
+
+  it('maps goal create/clear and plan mode', () => {
+    expect(toActivityEvents(event('goal/change', START, {
+      operation: 'create',
+      goal: { phase: 'active', maxGoalRounds: 10 },
+      roundsStarted: 2,
+    }))).toEqual([{
+      kind: 'goal-change', at: START,
+      goal: { phase: 'active', rounds: 2, maxRounds: 10 },
+    }])
+    expect(toActivityEvents(event('goal/change', START, { operation: 'clear' }))).toEqual([
+      { kind: 'goal-change', at: START },
+    ])
+    expect(toActivityEvents(event('plan/mode', START, { active: true }))).toEqual([
+      { kind: 'plan-mode', at: START, plan: { active: true } },
+    ])
+  })
+})
+
+describe('queued input', () => {
+  it('maps inbox splices to a signed queued count', () => {
+    expect(toActivityEvents(event('agent/inbox/spliced', START, {
+      target: 'next-turn', start: 0, removedCount: 0, inserted: [{ id: 'm1' }, { id: 'm2' }],
+    }))).toEqual([{ kind: 'queue-change', at: START, target: 'next-turn', delta: 2 }])
+    expect(toActivityEvents(event('agent/inbox/spliced', START, {
+      target: 'next-step', start: 0, removedCount: 1, inserted: [],
+    }))).toEqual([{ kind: 'queue-change', at: START, target: 'next-step', delta: -1 }])
+    expect(toActivityEvents(event('agent/inbox/spliced', START, { target: 'other', inserted: [] }))).toEqual([])
+  })
+})

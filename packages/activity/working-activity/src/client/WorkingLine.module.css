@@ -74,3 +74,10 @@
     opacity: 0.35;
   }
 }
+
+
+@media (prefers-reduced-motion: reduce) {
+  .marker {
+    animation: none;
+  }
+}

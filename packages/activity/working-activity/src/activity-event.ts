@@ -42,6 +42,54 @@ export type WaitingReason = 'retry' | 'approval' | 'compaction'
  */
 export type ActivityStreamResetReason = 'abandoned' | 'attempt-settled'
 
+/** Counts of the agent's current todo list (the `todo/write` whole-list snapshot). */
+export interface ActivityTodoCounts {
+  readonly done: number
+  readonly total: number
+  readonly inProgress: number
+}
+
+/** One background job registered for this session (a subset of `JobView`). */
+export interface ActivityJob {
+  readonly id: string
+  readonly kind: string
+  readonly label: string
+  readonly startedAt: number
+}
+
+/** One direct child session announced by `subagent/catalog`. */
+export interface ActivitySubagent {
+  readonly id: string
+  readonly mode: string
+  readonly label?: string
+}
+
+/** One durable Agent Team member. */
+export interface ActivityTeamMember {
+  readonly id: string
+  readonly name: string
+  readonly phase: 'provisioning' | 'active' | 'failed'
+}
+
+/** One durable Agent Team task. */
+export interface ActivityTeamTask {
+  readonly id: string
+  readonly status: 'pending' | 'in_progress' | 'completed' | 'deleted'
+  readonly subject: string
+}
+
+/** Current durable goal, reduced to what a status line can display. */
+export interface ActivityGoal {
+  readonly phase: 'active' | 'paused' | 'blocked' | 'complete'
+  readonly rounds: number
+  readonly maxRounds: number
+}
+
+/** Current plan-mode state. */
+export interface ActivityPlan {
+  readonly active: boolean
+}
+
 /** One normalized activity event. */
 export type ActivityEvent =
   /** A new turn opened: per-turn counters reset, phase → waiting. */
@@ -102,3 +150,28 @@ export type ActivityEvent =
    * host's reason vocabulary, so the tracker never learns those spellings.
    */
   | { readonly kind: 'turn-end'; readonly at: number; readonly interrupted?: boolean }
+  /** The route advertised its request-context capacity for the next request. */
+  | { readonly kind: 'context-window'; readonly at: number; readonly window: number }
+  /** The agent's whole todo list was replaced. */
+  | { readonly kind: 'todo-write'; readonly at: number; readonly counts: ActivityTodoCounts }
+  /** A background job started. */
+  | { readonly kind: 'job-start'; readonly at: number; readonly job: ActivityJob }
+  /** A background job settled. */
+  | { readonly kind: 'job-end'; readonly at: number; readonly jobId: string }
+  /** A direct child subagent was announced or updated. */
+  | { readonly kind: 'subagent-catalog'; readonly at: number; readonly subagent: ActivitySubagent }
+  /** One durable Agent Team member changed. */
+  | { readonly kind: 'team-member'; readonly at: number; readonly member: ActivityTeamMember }
+  /** One durable Agent Team task changed. */
+  | { readonly kind: 'team-task'; readonly at: number; readonly task: ActivityTeamTask }
+  /** The current durable goal changed; absent clears it. */
+  | { readonly kind: 'goal-change'; readonly at: number; readonly goal?: ActivityGoal }
+  /** Plan mode entered or left. */
+  | { readonly kind: 'plan-mode'; readonly at: number; readonly plan: ActivityPlan }
+  /** One durable inbox splice changed a queued-message count. */
+  | {
+    readonly kind: 'queue-change'
+    readonly at: number
+    readonly target: 'next-turn' | 'next-step'
+    readonly delta: number
+  }

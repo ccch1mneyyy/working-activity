@@ -1,7 +1,7 @@
 # GUI 兼容性核查：deepseek-harness-desktop（Tauri）
 
 > 核查对象：`/home/arch/deepseek-harness-desktop`（`deepseek-harness-desktop@0.22.4`，checkout `4041db5c`，2026-10-09）
-> 插件：`dsh-working-activity@0.6.0`（2026-10-19 工作树，RC2 适配后的声明与 bundle）
+> 插件：`dsh-working-activity@0.7.0`（2026-10-19 工作树，RC2 适配后的声明与 bundle）
 > 静态核查脚本：`packages/activity/working-activity/scripts/verify-gui-contract.mjs`
 > 结论：**客户端 bundle 不需要 GUI 专用适配代码**。GUI 的聊天面就是官方 DSH Web 客户端（iframe），与本包已适配的 WebUI 共用同一个 `dsh-client-modules` 冻结模块表和同一套 `dsh.client` 装配链；`platform: "web"`、seed externals、React peer、CSS Modules 注入、`conversation.input.dock` 均通过。
 > 运行时声明门禁也已通过：当前 peer 区间在 `includePrerelease` 语义下覆盖 GUI 0.22.4 推荐内核 `0.2.0-rc.2`、本机活动内核 `0.2.1-rc.2` 与旧线 `0.1.7-rc.2`（§4/§6.1）。剩余风险是 GUI 未来换到 peer 区间之外的新内核线时，内核会静默跳过本插件——发布前用脚本 `--strict-baseline` 复跑即可捕获。
@@ -19,7 +19,7 @@
 | 内嵌 Web 客户端 React | **18.3.1** | 内核 `dsh-web-frontend` 产物内的 `version:"18.3.1"`（见 §3.3） |
 | 本机可核对内核 A | `@deepseek-ai/dsh@0.2.1-rc.2`（`~/.dsh-runtime` 活动内核） | `~/.dsh-runtime/npm/lib/node_modules/@deepseek-ai/dsh/package.json:4` |
 | 本机可核对内核 B | `@deepseek-ai/dsh@0.2.0-rc.2`（备份） | `~/.dsh-runtime/backups/dsh-0.2.0-rc.2/package.json:4` |
-| 插件版本 | `dsh-working-activity@0.6.0` | `packages/activity/working-activity/package.json:4` |
+| 插件版本 | `dsh-working-activity@0.7.0` | `packages/activity/working-activity/package.json:4` |
 
 > GUI 的 catalog `0.2.1-alpha.1` 只用于 GUI 插件仓库的 typecheck/构建；GUI 运行时用的是用户机器上按资源清单下载的 DSH 内核，二者不要混为一谈。
 
@@ -149,7 +149,7 @@ working-activity 的 client bundle 实际只 `require("react/jsx-runtime")`（`l
 | `0.1.7-rc.2`（旧 WebUI 线） | 通过 | 保留旧区间 |
 
 风险：只要 GUI 把推荐内核抬到 `^0.2.0-rc.2` 上界之外（`0.3.x` 或新的预发布线），或 peer 更新滞后于 GUI 基线，bundle 就会再次被静默跳过。发布前固定跑 `node scripts/verify-gui-contract.mjs --strict-baseline`；失败时按顺序选择：放宽 peer、显式声明 `engines.dsh`（覆盖 peer 判定）、或临时
-`dsh plugin --profile tauri allow-version dsh-working-activity@0.6.0 --dsh-version <核心版本> --accept-risk`
+`dsh plugin --profile tauri allow-version dsh-working-activity@0.7.0 --dsh-version <核心版本> --accept-risk`
 （逐版本豁免，不是长期方案）。
 
 ### 6.2 其它限制

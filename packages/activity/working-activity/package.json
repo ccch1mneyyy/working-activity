@@ -1,7 +1,7 @@
 {
   "name": "dsh-working-activity",
-  "description": "Live model working-status line: playful copy, running tool, turn elapsed — for TUI, Web UI, and the desktop GUI",
-  "version": "0.6.0",
+  "description": "Live model working-status line: playful copy, running tool, elapsed time, and a context/todos/jobs HUD — for TUI, Web UI, and the desktop GUI",
+  "version": "0.7.0",
   "type": "module",
   "main": "lib/types/index.js",
   "types": "lib/types/index.d.ts",

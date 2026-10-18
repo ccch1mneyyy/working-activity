@@ -29,6 +29,17 @@ describe('parseWorkingActivityConfig', () => {
     expect(raw.frames).toBe('whale-bubbles')
   })
 
+  it('parses the HUD switches and thresholds', () => {
+    const { config } = parseWorkingActivityConfig(JSON.stringify({
+      hud: false,
+      contextWarnAt: 70,
+      contextDangerAt: 90,
+    }))
+    expect(config.hud).toBe(false)
+    expect(config.contextWarnAt).toBe(70)
+    expect(config.contextDangerAt).toBe(90)
+  })
+
   it('rejects an unknown frames value (falls back to default)', () => {
     const { config } = parseWorkingActivityConfig('{"frames":"no-such-preset"}')
     expect(config.frames).toBe(DEFAULT_ACTIVITY_CONFIG.frames)
@@ -70,12 +81,21 @@ describe('featureOn', () => {
     expect(featureOn(config, 'weekend')).toBe(false)
   })
 
+  it('keeps context pressure on in minimal mode', () => {
+    expect(featureOn({ mode: 'minimal' as const }, 'context')).toBe(true)
+    expect(featureOn({ mode: 'minimal' as const }, 'todos')).toBe(false)
+  })
+
   it('cost is always on', () => {
     // `cost` (and `shimmer`) are pi-extension-only surfaces: the DSH line has
     // neither, so the flag list must not accept them — a parsed-but-ignored
     // switch is a silently broken user config.
     expect(FEATURE_FLAGS).not.toContain('cost')
     expect(FEATURE_FLAGS).not.toContain('shimmer')
+    // The DSH HUD switches are real: every one must reach the tracker gate.
+    for (const flag of ['context', 'todos', 'jobs', 'subagents', 'team', 'goal', 'plan', 'queue', 'tokens'] as const) {
+      expect(FEATURE_FLAGS).toContain(flag)
+    }
   })
 
   it('lively defaults everything on', () => {

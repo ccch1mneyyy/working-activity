@@ -6,7 +6,10 @@
  * @module @deepseek-ai/dsh-working-activity/status
  */
 
-import type { ActivityEvent, WaitingReason } from './activity-event.js'
+import type {
+  ActivityEvent, ActivityGoal, ActivityJob, ActivitySubagent, ActivityTeamMember,
+  ActivityTeamTask, WaitingReason,
+} from './activity-event.js'
 import {
   actionFor, compactPhrase, continuePhrase, donePhrase, failPhrase, fmtDuration,
   holidayPhrase, isGitTool, isNight, isWeekend, mixSlot, modelQuip, overflowPhrase, rarePhrase,
@@ -14,7 +17,7 @@ import {
   type PhraseSlot,
 } from './phrases.js'
 import { feedSessionEvent } from './compat/session-events.js'
-import { t } from './lang.js'
+import { langNow, t } from './lang.js'
 
 /** Public status phases a UI can render. */
 export type ActivityPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
@@ -27,7 +30,7 @@ export type ActivityPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
  * persisted projection checkpoint from an older build is discarded (the host
  * refolds the log) instead of being misread as the new shape.
  */
-export const TRACKER_SNAPSHOT_VERSION = 6
+export const TRACKER_SNAPSHOT_VERSION = 7
 
 /** One snapshot of the model's activity, renderable by any UI. */
 export interface ActivityState {
@@ -47,6 +50,14 @@ export interface ActivityState {
   readonly turnElapsedMs: number
   /** Wall-clock time the current phase started, for animations. */
   readonly phaseStartedAt: number
+  /**
+   * Wall clock the displayed tool started, when the phase is `tool`.
+   *
+   * The line's tool counter uses the OLDEST active tool, which is not always
+   * the current phase's start when tools overlap; a client that re-ticks the
+   * counter needs this exact anchor.
+   */
+  readonly toolStartedAt?: number
 }
 
 /** Per-turn thinking/tooling split, exposed for done summaries and stats. */
@@ -77,6 +88,24 @@ export interface TrackerFeatures {
   readonly modelQuips?: boolean
   /** Comeback quip after the user interrupts. */
   readonly continuePhrases?: boolean
+  /** Context-pressure HUD badge. */
+  readonly context?: boolean
+  /** Todo-progress HUD badge. */
+  readonly todos?: boolean
+  /** Running-background-job HUD badge. */
+  readonly jobs?: boolean
+  /** Direct-child subagent HUD badge. */
+  readonly subagents?: boolean
+  /** Agent Team HUD badge. */
+  readonly team?: boolean
+  /** Durable goal HUD badge. */
+  readonly goal?: boolean
+  /** Plan-mode HUD badge. */
+  readonly plan?: boolean
+  /** Queued-input HUD badge. */
+  readonly queue?: boolean
+  /** Completed-turn token HUD badge. */
+  readonly tokens?: boolean
 }
 
 /** Configuration knobs for the state machine (subset of plugin Config). */
@@ -95,6 +124,14 @@ export interface TrackerConfig {
   readonly showTokPerSec?: boolean
   /** Work reminder after this many turn-hours (0 = off). */
   readonly workRemindAt?: number
+  /** Master switch for the compact HUD suffix; false hides every badge. */
+  readonly hud?: boolean
+  /** `lively` shows the full HUD by default; `minimal` keeps only warnings. */
+  readonly mode?: 'lively' | 'minimal'
+  /** Context-pressure warning threshold, in percent (default 80). */
+  readonly contextWarnAt?: number
+  /** Context-pressure danger threshold, in percent (default 95). */
+  readonly contextDangerAt?: number
 }
 
 /** A tool execution in flight. */
@@ -165,6 +202,19 @@ interface TrackerSnapshotShape {
   readonly waitingReasonAt: number
   readonly tokBuf: number
   readonly tokWindowStart: number
+  readonly contextWindow: number
+  readonly contextTokens: number
+  readonly todoDone: number
+  readonly todoTotal: number
+  readonly todoInProgress: number
+  readonly jobs: readonly ActivityJob[]
+  readonly subagents: readonly ActivitySubagent[]
+  readonly teamMembers: readonly ActivityTeamMember[]
+  readonly teamTasks: readonly ActivityTeamTask[]
+  readonly goal: ActivityGoal | null
+  readonly planActive: boolean
+  readonly queueNextTurn: number
+  readonly queueNextStep: number
 }
 
 /** Format one tool into its display fragment (`跑个命令 npm test`). */
@@ -327,6 +377,28 @@ export class ActivityTracker {
   /** Streaming token estimate for the tps prefix. */
   private tokBuf = 0
   private tokWindowStart = 0
+  /** Newest provider-advertised request-context capacity. */
+  private contextWindow = 0
+  /** Latest provider-reported prompt pressure (uncached input + cache buckets). */
+  private contextTokens = 0
+  /** Whole current todo list counts from the latest `todo/write`. */
+  private todoDone = 0
+  private todoTotal = 0
+  private todoInProgress = 0
+  /** Live background jobs keyed by job id. */
+  private jobs = new Map<string, ActivityJob>()
+  /** Direct child sessions announced by `subagent/catalog`, keyed by child id. */
+  private subagents = new Map<string, ActivitySubagent>()
+  /** Durable Agent Team members/tasks, keyed by id. */
+  private teamMembers = new Map<string, ActivityTeamMember>()
+  private teamTasks = new Map<string, ActivityTeamTask>()
+  /** Current durable goal, absent before create and after clear. */
+  private goal: ActivityGoal | undefined
+  /** Whether plan mode is active. */
+  private planActive = false
+  /** Queued input counts, by inbox target. */
+  private queueNextTurn = 0
+  private queueNextStep = 0
 
   /**
    * @param config - Behavioral knobs.
@@ -387,6 +459,9 @@ export class ActivityTracker {
   onCompact(kind: 'done' | 'overflow'): void {
     // The compaction stall (if any) is over either way.
     if (this.waitingReason === 'compaction') this.clearWaitingReason()
+    // The old provider sample priced a surface that no longer exists; hide the
+    // context badge until the next request reports a fresh usage sample.
+    this.contextTokens = 0
     if (!this.config.phrases) return
     this.pendingPhrase = kind === 'overflow' ? overflowPhrase() : compactPhrase()
     this.pendingUntil = this.now() + PENDING_MS
@@ -485,6 +560,10 @@ export class ActivityTracker {
         if (usage !== undefined) {
           this.turnTokens += usage.inputTokens + usage.outputTokens
             + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+          // The provider-reported prompt size is the same anchor the token
+          // meter uses: uncached input plus both cache buckets, output excluded.
+          const promptTokens = usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+          if (promptTokens > 0) this.contextTokens = promptTokens
         }
         // A settled message proves tokens existed, so a fold (or replay) that
         // never saw the frames still leaves the waiting pool: the first token
@@ -562,6 +641,42 @@ export class ActivityTracker {
         }
         return
       }
+      case 'context-window':
+        if (Number.isFinite(event.window) && event.window > 0) this.contextWindow = event.window
+        return
+      case 'todo-write':
+        this.todoDone = event.counts.done
+        this.todoTotal = event.counts.total
+        this.todoInProgress = event.counts.inProgress
+        return
+      case 'job-start':
+        this.jobs.set(event.job.id, event.job)
+        return
+      case 'job-end':
+        this.jobs.delete(event.jobId)
+        return
+      case 'subagent-catalog':
+        this.subagents.set(event.subagent.id, event.subagent)
+        return
+      case 'team-member':
+        this.teamMembers.set(event.member.id, event.member)
+        return
+      case 'team-task':
+        this.teamTasks.set(event.task.id, event.task)
+        return
+      case 'goal-change':
+        this.goal = event.goal
+        return
+      case 'plan-mode':
+        this.planActive = event.plan.active
+        return
+      case 'queue-change': {
+        const current = event.target === 'next-turn' ? this.queueNextTurn : this.queueNextStep
+        const next = Math.max(0, current + event.delta)
+        if (event.target === 'next-turn') this.queueNextTurn = next
+        else this.queueNextStep = next
+        return
+      }
       case 'turn-end': {
         const at = event.at
         if (this.activeTools.size > 0) {
@@ -627,6 +742,11 @@ export class ActivityTracker {
 
   /** Render the current status snapshot at a wall-clock instant. */
   render(nowMs: number = this.now()): ActivityState {
+    return this.withHud(this.renderBase(nowMs))
+  }
+
+  /** Phase-specific render, before the compact HUD suffix. */
+  private renderBase(nowMs: number = this.now()): ActivityState {
     switch (this.phase) {
       case 'idle':
         return {
@@ -682,6 +802,7 @@ export class ActivityTracker {
           toolCount: this.toolCount,
           turnElapsedMs: this.turnElapsedMs(nowMs),
           phaseStartedAt: this.phaseStartedAt,
+          toolStartedAt: tool.startedAt,
         }
       }
       case 'waiting':
@@ -693,6 +814,66 @@ export class ActivityTracker {
         return rendered
       }
     }
+  }
+
+  /** Append the compact HUD suffix (context, jobs, todos, team, goal, plan). */
+  private withHud(state: ActivityState): ActivityState {
+    if (state.phase === 'idle' || state.line.length === 0 || this.config.hud === false) return state
+    const suffix = this.hudSuffix(state.phase)
+    return suffix.length === 0 ? state : { ...state, line: `${state.line} · ${suffix}` }
+  }
+
+  /** Whether one HUD signal is enabled for this composition. */
+  private hudOn(feature: 'context' | 'todos' | 'jobs' | 'subagents' | 'team' | 'goal' | 'plan' | 'queue' | 'tokens'): boolean {
+    const explicit = (this.config.features ?? {})[feature]
+    if (typeof explicit === 'boolean') return explicit
+    // Context pressure is functional information, so it survives minimal mode;
+    // the rest are decorative/verbose and yield to it.
+    return feature === 'context' ? true : this.config.mode !== 'minimal'
+  }
+
+  /** Compose the compact HUD badges for one phase. */
+  private hudSuffix(phase: ActivityPhase): string {
+    const zh = langNow() === 'zh'
+    const badges: string[] = []
+    const teamActive = [...this.teamMembers.values()].filter(member => member.phase === 'active').length
+
+    if (this.hudOn('context') && this.contextWindow > 0 && this.contextTokens > 0) {
+      const percent = Math.min(999, Math.round((this.contextTokens / this.contextWindow) * 100))
+      const warnAt = this.config.contextWarnAt ?? 80
+      const dangerAt = this.config.contextDangerAt ?? 95
+      const marker = dangerAt > 0 && percent >= dangerAt
+        ? ' ⛔'
+        : warnAt > 0 && percent >= warnAt ? ' ⚠' : ''
+      badges.push(`ctx ${percent}%${marker}`)
+    }
+    if (this.hudOn('jobs') && this.jobs.size > 0) {
+      badges.push(zh ? `${this.jobs.size} 任务` : `${this.jobs.size} job${this.jobs.size === 1 ? '' : 's'}`)
+    }
+    if (this.hudOn('todos') && this.todoTotal > 0) {
+      badges.push(zh ? `${this.todoDone}/${this.todoTotal} 待办` : `${this.todoDone}/${this.todoTotal} todo`)
+    }
+    if (this.hudOn('team') && teamActive > 0) {
+      badges.push(zh ? `${teamActive} 团队` : `${teamActive} team`)
+    } else if (this.hudOn('subagents') && this.subagents.size > 0) {
+      badges.push(zh ? `${this.subagents.size} 子代理` : `${this.subagents.size} sub`)
+    }
+    if (this.hudOn('goal') && this.goal !== undefined && this.goal.phase !== 'complete') {
+      const rounds = this.goal.maxRounds > 0 ? `${this.goal.rounds}/${this.goal.maxRounds}` : `${this.goal.rounds}`
+      badges.push(zh ? `目标 ${rounds}` : `goal ${rounds}`)
+    }
+    if (this.hudOn('plan') && this.planActive) {
+      badges.push(zh ? '计划' : 'plan')
+    }
+    if (this.hudOn('queue')) {
+      const queued = this.queueNextTurn + this.queueNextStep
+      if (queued > 0) badges.push(zh ? `+${queued} 排队` : `+${queued} queued`)
+    }
+    if (phase === 'done' && this.hudOn('tokens') && this.turnTokens > 0) {
+      badges.push(`${fmtTokens(this.turnTokens)} tok`)
+    }
+    // The line is shared by TUI, WebUI, and GUI: keep the suffix scannable.
+    return badges.slice(0, phase === 'done' ? 5 : 4).join(' · ')
   }
 
   /** Per-turn thinking/tooling split for stats consumers. */
@@ -747,6 +928,19 @@ export class ActivityTracker {
       waitingReasonAt: this.waitingReasonAt,
       tokBuf: this.tokBuf,
       tokWindowStart: this.tokWindowStart,
+      contextWindow: this.contextWindow,
+      contextTokens: this.contextTokens,
+      todoDone: this.todoDone,
+      todoTotal: this.todoTotal,
+      todoInProgress: this.todoInProgress,
+      jobs: [...this.jobs.values()],
+      subagents: [...this.subagents.values()],
+      teamMembers: [...this.teamMembers.values()],
+      teamTasks: [...this.teamTasks.values()],
+      goal: this.goal ?? null,
+      planActive: this.planActive,
+      queueNextTurn: this.queueNextTurn,
+      queueNextStep: this.queueNextStep,
     }
     return data
   }
@@ -818,6 +1012,19 @@ export class ActivityTracker {
     tracker.waitingReasonAt = data.waitingReasonAt
     tracker.tokBuf = data.tokBuf
     tracker.tokWindowStart = data.tokWindowStart
+    tracker.contextWindow = data.contextWindow ?? 0
+    tracker.contextTokens = data.contextTokens ?? 0
+    tracker.todoDone = data.todoDone ?? 0
+    tracker.todoTotal = data.todoTotal ?? 0
+    tracker.todoInProgress = data.todoInProgress ?? 0
+    tracker.jobs = new Map((data.jobs ?? []).map(job => [job.id, { ...job }]))
+    tracker.subagents = new Map((data.subagents ?? []).map(subagent => [subagent.id, { ...subagent }]))
+    tracker.teamMembers = new Map((data.teamMembers ?? []).map(member => [member.id, { ...member }]))
+    tracker.teamTasks = new Map((data.teamTasks ?? []).map(task => [task.id, { ...task }]))
+    tracker.goal = data.goal ?? undefined
+    tracker.planActive = data.planActive === true
+    tracker.queueNextTurn = data.queueNextTurn ?? 0
+    tracker.queueNextStep = data.queueNextStep ?? 0
     return tracker
   }
 
@@ -1237,6 +1444,16 @@ export class ActivityTracker {
       narration: this.narratedText ?? null,
       toolCount: this.toolCount,
       turnElapsedMs: this.turnElapsedMs(nowMs),
+      contextWindow: this.contextWindow,
+      contextTokens: this.contextTokens,
+      todoDone: this.todoDone,
+      todoTotal: this.todoTotal,
+      jobs: this.jobs.size,
+      subagents: this.subagents.size,
+      teamActive: [...this.teamMembers.values()].filter(member => member.phase === 'active').length,
+      goal: this.goal ?? null,
+      planActive: this.planActive,
+      queued: this.queueNextTurn + this.queueNextStep,
     }
   }
 

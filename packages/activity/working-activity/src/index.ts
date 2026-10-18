@@ -85,6 +85,12 @@ export type Config = {
   showTokPerSec?: boolean
   /** Work reminder after this many turn-hours (0 = off). */
   workRemindAt?: number
+  /** Master switch for the compact HUD suffix. */
+  hud?: boolean
+  /** Context-pressure warning threshold, in percent. */
+  contextWarnAt?: number
+  /** Context-pressure danger threshold, in percent. */
+  contextDangerAt?: number
   /**
    * Append a JSON trace of every distinct rendered line (phase, copy-pool
    * inputs, slot) to the debug log — the only way to answer "why did it say
@@ -113,6 +119,9 @@ export const Config: Schemastery<Config> = z.object({
   showTokPerSec: z.boolean().default(false),
   workRemindAt: z.number().min(0).max(24).default(0),
   debugLog: z.boolean().default(false),
+  hud: z.boolean().default(true),
+  contextWarnAt: z.number().min(0).max(100).default(80),
+  contextDangerAt: z.number().min(0).max(100).default(95),
 })
 
 /** Structural view of the TUI prompt service; the real type lives in dsh-tui. */
@@ -140,6 +149,9 @@ interface ResolvedConfig {
   showTokPerSec: boolean
   workRemindAt: number
   debugLog: boolean
+  hud: boolean
+  contextWarnAt: number
+  contextDangerAt: number
 }
 
 /**
@@ -171,6 +183,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     showTokPerSec: config.showTokPerSec ?? false,
     workRemindAt: config.workRemindAt ?? 0,
     debugLog: config.debugLog ?? false,
+    hud: config.hud ?? true,
+    contextWarnAt: config.contextWarnAt ?? 80,
+    contextDangerAt: config.contextDangerAt ?? 95,
   }
   // Trace target for {@link traceLine}: `~/.dsh-tui` mirrors where the UI keeps
   // this plugin's config file; the env var redirects it (tests, bug reports).
@@ -215,6 +230,11 @@ export function apply(ctx: Context, config: Config = {}): void {
   // call is itself effect-owned, so fiber disposal unregisters the slot.
   const prompt = ctx.get('tuiPrompt', false) as TuiPromptLike | undefined
   const promptHandle = prompt?.register('activity', undefined)
+  // With no prompt slot, no debug trace and publish off, `publish` would queue
+  // an empty microtask per session event and `armTimer` would keep a per-session
+  // timer alive for a line nobody consumes. The projection and live-overlay
+  // paths do not use `publish`/`armTimer`, so the whole line sink can be skipped.
+  const hasLineSink = promptHandle !== undefined || debugLogPath !== undefined || resolved.publish
 
   // The `⏵` self-narration contract rides the stable system-prompt sections:
   // injected when the systemPrompt service is composed (agent assemblies
@@ -251,10 +271,25 @@ export function apply(ctx: Context, config: Config = {}): void {
       failPhrases: on('failPhrases'),
       modelQuips: on('modelQuips'),
       continuePhrases: on('continuePhrases'),
+      // Context pressure is functional, so it survives minimal mode unless the
+      // user explicitly turns it off (unlike the decorative badges below).
+      context: resolved.features?.context ?? true,
+      todos: on('todos'),
+      jobs: on('jobs'),
+      subagents: on('subagents'),
+      team: on('team'),
+      goal: on('goal'),
+      plan: on('plan'),
+      queue: on('queue'),
+      tokens: on('tokens'),
     },
     customPhrases: resolved.customPhrases,
     showTokPerSec: resolved.showTokPerSec,
     workRemindAt: resolved.workRemindAt,
+    hud: resolved.hud,
+    mode: resolved.mode,
+    contextWarnAt: resolved.contextWarnAt,
+    contextDangerAt: resolved.contextDangerAt,
   }
 
   // Web transport: a client-visible session projection. Registered only when the
@@ -334,6 +369,7 @@ export function apply(ctx: Context, config: Config = {}): void {
    * fresher, never staler.
    */
   const armTimer = (runtime: SessionRuntime): void => {
+    if (!hasLineSink) return
     stopTimer(runtime)
     const nowMs = Date.now()
     const wakeAt = runtime.tracker.nextWakeAt(nowMs)
@@ -358,6 +394,7 @@ export function apply(ctx: Context, config: Config = {}): void {
    * session/event callbacks run.
    */
   const feed = (runtime: SessionRuntime, state: ActivityState): void => {
+    if (!hasLineSink) return
     slotSession = runtime.session
     publish(runtime, state)
     // A pending wake-up will refresh the line soon enough; re-arming on every
@@ -400,10 +437,15 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   /** Publish one rendered snapshot: TUI slot update + throttled session event. */
   const publish = (runtime: SessionRuntime, state: ActivityState): void => {
+    if (!hasLineSink) return
+    // Trace synchronously, from the tracker state that produced this line. The
+    // session append must be deferred (the appending guard is still held in
+    // session/event callbacks), but the trace is read-only and would otherwise
+    // describe a LATER tracker state after a fast event burst.
+    if (debugLogPath !== undefined) traceLine(debugLogPath, runtime, state)
     queueMicrotask(() => {
       const line = state.phase === 'idle' ? undefined : state.line
       if (runtime.session === slotSession) promptHandle?.set(line)
-      if (debugLogPath !== undefined) traceLine(debugLogPath, runtime, state)
       if (!resolved.publish) return
       const nowMs = Date.now()
       const lineChanged = state.line !== runtime.lastPublishedLine
@@ -413,8 +455,8 @@ export function apply(ctx: Context, config: Config = {}): void {
       const liveThrottle = state.phase !== 'idle' && state.phase !== 'done'
         && nowMs - runtime.lastPublishAt >= resolved.publishIntervalMs
       if (!lineChanged && !phaseChanged && !liveThrottle) return
-      // Optional fields must be omitted (not undefined): session append rejects
-      // data JSON would discard, and `activity/status` is a lossless-JSON event.
+      // Optional fields must be omitted (not undefined): both the legacy event
+      // and the plugin record must be lossless JSON.
       const payload: ActivityStatusEvent = {
         phase: state.phase,
         line: state.line,
