@@ -61,3 +61,18 @@ describe('refreshElapsedSuffix', () => {
       .toBe('等等 · 总1h2m')
   })
 })
+
+describe('concurrent tool anchor', () => {
+  it('counts the tool phase from the displayed (oldest) tool, not the newest phase start', () => {
+    // Two tools overlap: the host line shows the oldest tool's 10s, while the
+    // phase started when the second tool arrived. The client must use the
+    // explicit tool anchor instead of phaseStartedAt.
+    const line = '跑命令 sleep 10 · 10s'
+    const value = view({
+      phase: 'tool',
+      phaseStartedAt: BASE - 5_000,
+      toolStartedAt: BASE - 10_000,
+    })
+    expect(refreshElapsedSuffix(line, value, BASE + 2_000)).toBe('跑命令 sleep 10 · 12s')
+  })
+})

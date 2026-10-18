@@ -44,6 +44,7 @@ DeepSeek Harness（DSH）的实时工作状态行插件。agent 工作期间，�
 - **相位感知的状态行。** 状态行按 `waiting` → `thinking` → `tool` → `done` 移动。每个相位有独立的文案池、轮换节奏与耗时格式；已结算的相位展示固定的收尾摘要，而不是继续计数的计时器。
 - **真实的工具活动。** 运行中的工具渲染为*动词 + 参数细节 + 已耗时*（`跑个命令 npm test · 12s`）。结果与调用按精确 call id 配对；失败的工具使用失败文案并带 `✗` 标记。
 - **回合摘要。** `turn/end` 后状态行变为 `搞定 ✓ · 4 工具 · 想12s 干11s`——完成工具数、思考耗时与干活耗时——并短暂钉住最后一个工具的片段。
+- **紧凑 HUD。** 状态行末尾拼接一组会话运行事实：上下文压力（`ctx 62%`，达到警告阈值加 `⚠`，危险阈值加 `⛔`）、待办进度（`2/5 待办`）、后台任务、直接子代理或 Agent Team 成员、持久目标轮次、计划模式、排队输入，以及收尾时的本回合 token 总量。每个信号都可单独开关；宿主没有发布该信号时直接不渲染。
 - **实时自述。** `narrate` 默认开启：插件注入一条简短的系统提示词约定，要求模型在每个步骤开始时写一行 `⏵ …`。该行实时显示在状态行中，持久消息里仍然保留它。
 - **双语、按特性开关的文案。** 中英文案池、日间/深夜变体、长思考分档、周末与节假日文案、稀有彩蛋、工具连击、模型切换梗与失败文案都可独立开关。`phrases: false` 或 `mode: minimal` 渲染朴素功能标签。
 - **构造上无侵入。** 插件不注册工具、不追加 surface 事件、不进入派生的模型历史。它唯一可能影响提示词的部分是可选的自述约定。
@@ -52,11 +53,12 @@ DeepSeek Harness（DSH）的实时工作状态行插件。agent 工作期间，�
 
 ## 工作原理
 
-node 半边为每个会话维护一个 `ActivityTracker`，输入有三类：
+node 半边为每个会话维护一个 `ActivityTracker`，输入有四类：
 
 1. **持久会话事件**——`turn/start`、`step/start`、`assistant/message`、`tool/call`、`tool/result`、`turn/end`、`assistant/attempt`、`model/selection`，以及压缩、审批与重试信号。
 2. **实时 assistant-stream 帧**——`agent/assistant-stream`（`start` / `chunk` / `end`）。当前宿主线上，流式增量、首 token 时刻与 `⏵` 自述都由这些帧承载。
 3. **agent 状态**——`agent/status`（`idle` / `running`）。
+4. **HUD 特性事件**——`request/context`（路由上下文窗口）、`todo/write`、`job/registered` / `job/settled`、`subagent/catalog`、`team/member` / `team/task`、`goal/change`、`plan/mode` 与 `agent/inbox/spliced`。旧宿主线缺少某个信号是能力缺失，不是损坏：对应的徽章直接省略。
 
 tracker 渲染一行纯文本，并通过两条通道对外提供同一个值：
 
@@ -176,16 +178,21 @@ GUI 侧的要求与 Web UI 相同：组合上文三个 boot row，并让 shell �
 | `narrate` | `boolean` | `true` | 向系统提示词注入 `⏵` 自述约定，并展示提取出的行。设为 `false` 则完全由事件推导。 |
 | `lang` | `'auto' \| 'zh' \| 'en'` | `'auto'` | 文案语言。`auto` 的解析顺序：`DSH_TUI_LANG` → `~/.dsh-tui/lang.json` → 操作系统 locale → `zh`。 |
 | `frames` | `string` | `'moon8'` | 帧预设名。对 UI 消费者是信息性的；`dsh-tui` 自己解析持久化的帧选择。 |
-| `mode` | `'lively' \| 'minimal'` | `'lively'` | `minimal` 只保留功能性信息（朴素标签，无俏皮文案池）。 |
+| `mode` | `'lively' \| 'minimal'` | `'lively'` | `minimal` 只保留功能性信息（朴素标签，无俏皮文案池）；上下文 HUD 仍保留。 |
 | `features` | `object` | `{}` | 单特性开关；显式值优先于 `mode` 默认值。 |
 | `customPhrases` | `string[]` | `[]` | 追加到基础思考文案池的额外短句。 |
 | `showTokPerSec` | `boolean` | `false` | 流式输出时显示估算的 `~tok/s` 前缀。该值由增量文本推导，不是 provider 的 usage。 |
 | `workRemindAt` | `number` | `0` | 累计工作达到该小时数后提示休息（0–24；`0` 关闭）。 |
+| `hud` | `boolean` | `true` | 紧凑 HUD 后缀的总开关；`false` 隐藏全部徽章。 |
+| `contextWarnAt` | `number` | `80` | 上下文压力达到该百分比时给 `ctx` 徽章加 `⚠`。 |
+| `contextDangerAt` | `number` | `95` | 达到该百分比时改用 `⛔`。 |
 | `debugLog` | `boolean` | `false` | 把每个不同渲染行的 JSON 追踪追加到 `~/.dsh-tui/working-activity-debug.log`（或 `DSH_WORKING_ACTIVITY_DEBUG_LOG` 指定的路径）。 |
 
 `features` 接受且由 tracker 实际生效的特性开关：
 
-`phrases`、`rareEggs`、`nightPhrases`、`weekend`、`holidays`、`combo`、`failPhrases`、`modelQuips`、`continuePhrases`。
+`phrases`、`rareEggs`、`nightPhrases`、`weekend`、`holidays`、`combo`、`failPhrases`、`modelQuips`、`continuePhrases`、`context`、`todos`、`jobs`、`subagents`、`team`、`goal`、`plan`、`queue`、`tokens`。
+
+HUD 开关在 `lively` 模式下默认开启。`minimal` 保留 `context`（告警属于功能信息），其余默认关闭，除非在 `features` 里显式打开。后缀最多四个徽章（`done` 时五个），按操作优先级排序：context、jobs、todos、team/subagents、goal、plan、queue、tokens。
 
 ## 投影契约
 
@@ -217,13 +224,16 @@ interface WorkingActivityView {
   phrase?: string         // 当前俏皮文案或 ⏵ 自述
   toolCount: number       // 本回合已完成的工具数
   phaseStartedAt: number  // 当前相位开始的 epoch 毫秒
+  toolStartedAt?: number  // 当前展示的（最旧）工具开始的 epoch 毫秒
   turnStartedAt: number   // 当前回合开始的 epoch 毫秒（idle 时为 0）
   updatedAt: number       // 最后一次折叠事件的时间戳
   lang: 'zh' | 'en'       // 渲染 line 时使用的语言
 }
 ```
 
-投影是事件驱动的，两次折叠之间 `line` 可能落后于墙钟。值里带有时间戳，客户端可以据此只重算那个会动的片段；Web 与 GUI 半边正是这样做的，片段形状无法识别时则回退到宿主原文。
+投影是事件驱动的，两次折叠之间 `line` 可能落后于墙钟。值里带有时间戳，客户端可以据此只重算那个会动的片段；Web 与 GUI 半边正是这样做的，片段形状无法识别时则回退到宿主原文。tool 相位单独暴露 `toolStartedAt`：展示的是最旧的活跃工具，而并发工具到达时 `phaseStartedAt` 可能已经前移。
+
+当连续两次读取的字段完全相同时，`view` 会复用上一个 wire 对象。RC2 注册表用 `Object.is` 比较相邻 view 结果；复用引用正是抑制“内部状态变化但展示值没变”时多余广播的机制。
 
 客户端插件用 session 标准 kit 读取该值：
 
@@ -282,6 +292,7 @@ node 半边支持下列宿主线。界面列表示该宿主线上可用的渲染
 - **Web UI** 需要 `0.1.7-rc.2`、`0.2.0-rc.2` 或 `0.2.1-rc.2` 客户端编队。浏览器 bundle 按 RC2 shell 的种子表构建（`react`、`react/jsx-runtime`、`react-dom`、`@deepseek-ai/cordis`、`zod`、`@tanstack/react-virtual`、`@deepseek-ai/dsh-client-store`、`-ui-slots`、`-ui-primitives`、`-ui-dockkit`）；`0.1.7-rc.2` shell 是它的子集，也能解析 bundle 唯一的 value import：`react/jsx-runtime`。
 - **桌面 GUI** 复用 Web 入口：`platform: "web"`、同一个 dock 座位、同一份投影。插件运行在内核 Web 客户端里（当前线是 React 18.3.1），不在 GUI 宿主的 React 树中；peer 范围同时覆盖 18 / 19，避免 React 19 宿主把第二份 React 副本带进 bundle。GUI 必须提供 `react/jsx-runtime` 种子并组合上文三个 boot row。运行 `pnpm run verify:gui` 检查 GUI 契约（GUI 检出不存在时该门禁会跳过）。
 - **旧日志消费者**（例如重放会话日志的终端 UI）可在任一支持的宿主线上设置 `publish: true`。在 `0.2.x` 上是 ignorable 插件记录；在旧线是 legacy `activity/status` 事件，由注册垫片兜底。
+- **HUD 可用性**取决于宿主组合与日志：`request/context`、`todo/write`、`goal/change`、`plan/mode`、`team/*`、`subagent/catalog` 在 `0.1.2-alpha.2` 线已存在；`job/*` 与 `agent/inbox/spliced` 在 `0.1.7+` 线出现（`0.1.2-alpha.2` 没有）。缺失的信号不渲染徽章，也绝不猜值。
 
 ## 架构
 

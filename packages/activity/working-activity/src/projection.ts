@@ -12,12 +12,12 @@
  * The registry's definition contract changed between the corridors this package
  * supports, and every spelling below is still live somewhere:
  *
- * | field | `0.1.0-rc.6` | `0.1.2-alpha.2` | `0.1.7-rc.2` |
- * |---|---|---|---|
- * | state schema | — (every unit ships) | `stateSchema` | `stateSchema` |
- * | wire schema | `schema` | `viewSchema` | `wire.viewSchema` |
- * | view | `view(state)` | `view(state)` | `wire.view(state)` |
- * | `init` arguments | none | `header` | `header`, inherited count |
+ * | field | `0.1.0-rc.6` | `0.1.2-alpha.2` | `0.1.7-rc.2` | `0.2.x` |
+ * |---|---|---|---|---|
+ * | state schema | — (every unit ships) | `stateSchema` | `stateSchema` | `stateSchema` |
+ * | wire schema | `schema` | `viewSchema` | `wire.viewSchema` | `wire.viewSchema` |
+ * | view | `view(state)` | `view(state)` | `wire.view(state)` | `wire.view(state)` |
+ * | `init` arguments | none | `header` | `header`, inherited count | `header`, inherited count |
  *
  * Each `register` implementation reads only the fields it knows and ignores the
  * rest, so the definition below carries **every spelling at once** and registers
@@ -80,6 +80,8 @@ export interface WorkingActivityView {
   readonly toolCount: number
   /** Wall clock the current phase began (what a live `line` counts from). */
   readonly phaseStartedAt: number
+  /** Wall clock the displayed tool started, when the phase is `tool`. */
+  readonly toolStartedAt?: number
   /** Wall clock the current turn began (0 when no turn has started). */
   readonly turnStartedAt: number
   /**
@@ -116,6 +118,7 @@ const viewSchema = z.object({
   phrase: z.string().optional(),
   toolCount: z.number(),
   phaseStartedAt: z.number(),
+  toolStartedAt: z.number().optional(),
   turnStartedAt: z.number(),
   updatedAt: z.number(),
   lang: z.enum(['zh', 'en']),
@@ -162,6 +165,22 @@ export interface ActivityProjectionOptions {
   readonly live?: (state: unknown) => LiveActivityOverlay | undefined
 }
 
+/** Shallow equality of two wire values; all fields are scalars or absent. */
+function sameView(left: WorkingActivityView, right: WorkingActivityView): boolean {
+  return left.phase === right.phase
+    && left.line === right.line
+    && left.live === right.live
+    && left.label === right.label
+    && left.detail === right.detail
+    && left.phrase === right.phrase
+    && left.toolCount === right.toolCount
+    && left.phaseStartedAt === right.phaseStartedAt
+    && left.toolStartedAt === right.toolStartedAt
+    && left.turnStartedAt === right.turnStartedAt
+    && left.updatedAt === right.updatedAt
+    && left.lang === right.lang
+}
+
 /**
  * Build the `workingActivity` projection definition.
  * @param options - tracker configuration, clock and language supplier.
@@ -179,6 +198,12 @@ export function createActivityProjection(options: ActivityProjectionOptions): {
   apply: (state: unknown, event: SessionEvent) => ActivityProjectionState
 } {
   const now = options.now ?? Date.now
+  // The RC2 registry suppresses publication by `Object.is` on consecutive view
+  // results. Cache the last value per state object and reuse it when every
+  // field is unchanged; a no-op event then neither allocates a new wire object
+  // nor broadcasts.
+  const viewCache = new WeakMap<object, WorkingActivityView>()
+  let lastView: WorkingActivityView | undefined
   const fresh = (): ActivityTracker =>
     new ActivityTracker(options.trackerConfig, now, options.customActions)
   // A checkpoint the tracker refuses is stale, not fatal: `view` runs inside
@@ -217,7 +242,7 @@ export function createActivityProjection(options: ActivityProjectionOptions): {
     if (live !== undefined) tracker.applyLiveState(live)
     const rendered = tracker.render(at)
     const running = rendered.phase !== 'idle' && rendered.phase !== 'done'
-    return {
+    const next: WorkingActivityView = {
       phase: rendered.phase,
       line: rendered.line,
       live: running,
@@ -226,6 +251,7 @@ export function createActivityProjection(options: ActivityProjectionOptions): {
       ...(rendered.phrase === undefined ? {} : { phrase: rendered.phrase }),
       toolCount: rendered.toolCount,
       phaseStartedAt: rendered.phaseStartedAt,
+      ...(rendered.toolStartedAt === undefined ? {} : { toolStartedAt: rendered.toolStartedAt }),
       // `ActivityState` reports elapsed rather than the turn's start instant.
       // The difference is exact, and a client needs the instant to keep
       // ticking; only the idle phase means "there is no turn" — an elapsed of
@@ -234,6 +260,15 @@ export function createActivityProjection(options: ActivityProjectionOptions): {
       updatedAt: state.updatedAt,
       lang: options.lang(),
     }
+    const cached = viewCache.get(state)
+    if (cached !== undefined && sameView(cached, next)) return cached
+    if (lastView !== undefined && sameView(lastView, next)) {
+      viewCache.set(state, lastView)
+      return lastView
+    }
+    viewCache.set(state, next)
+    lastView = next
+    return next
   }
 
   return {
@@ -253,6 +288,10 @@ export function createActivityProjection(options: ActivityProjectionOptions): {
       // An event this unit does not model MUST return the same reference: the
       // host treats it as "zero downstream work".
       if (events.length === 0) return state
+      // `step/start` carries no tracker state change (the tracker opens a step
+      // only for bookkeeping); rebuilding the cell would publish a new
+      // `updatedAt` for a line no reader can see change.
+      if (events.every(item => item.kind === 'step-start')) return state
       const tracker = restoreOrFresh(state)
       for (const activityEvent of events) tracker.onEvent(activityEvent)
       const next = tracker.snapshot()

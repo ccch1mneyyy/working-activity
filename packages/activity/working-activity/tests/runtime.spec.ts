@@ -71,7 +71,7 @@ interface Harness {
 }
 
 /** Mount the plugin on a stub context. */
-function mount(): Harness {
+function mount(overrides: Record<string, unknown> = {}): Harness {
   const handlers = new Map<string, (...args: never[]) => void>()
   const disposers: Array<() => void> = []
   const ctx = {
@@ -86,7 +86,13 @@ function mount(): Harness {
       if (typeof disposer === 'function') disposers.push(disposer as () => void)
     },
   } as unknown as Context
-  WorkingActivity.apply(ctx, { publish: true, lang: 'zh', tickMs: 500, publishIntervalMs: 0 })
+  WorkingActivity.apply(ctx, {
+    publish: true,
+    lang: 'zh',
+    tickMs: 500,
+    publishIntervalMs: 0,
+    ...overrides,
+  })
 
   const a = fakeSession('session-a')
   const b = fakeSession('session-b')
@@ -146,6 +152,23 @@ describe('per-session runtimes', () => {
     expect(harness.b.published.every(entry => entry.type === PLUGIN_RECORD_TYPE)).toBe(true)
     expect(harness.a.published.at(-1)?.data.phase).toBe('waiting')
     expect(harness.b.published.at(-1)?.data.phase).toBe('tool')
+  })
+})
+
+describe('line sinks', () => {
+  it('arms no timer or microtask publish when no prompt, debug or publish sink exists', async () => {
+    // dsh-TUI mounts this plugin with publish:false and no tuiPrompt; the
+    // projection is folded by the host registry and live narration is noted on
+    // the event path, so a per-session timer would be pure idle wake-up.
+    const harness = mount({ publish: false })
+    harness.event(harness.a.session, 'turn/start', { turn: 1 })
+    harness.fire(
+      'agent/assistant-stream',
+      { agent: { session: harness.a.session }, frame: { type: 'start', attemptId: 'a', revision: 1, turn: 1, step: 1 } },
+    )
+    await flush()
+    expect(harness.a.published).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 

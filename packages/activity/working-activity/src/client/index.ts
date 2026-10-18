@@ -8,7 +8,7 @@
  * store, no refresh chain, and no event listener. Nothing is appended to the
  * session log — the reason dsh-tui mounts this plugin with `publish: false`.
  *
- * Mount contract (see the root README's "Web UI 集成" section): the web
+ * Mount contract (see the package README's "Web UI" section): the web
  * client's client-modules host scans loader entries for `dsh.client`
  * declarations and serves this package's `./client` bundle at
  * /plugins/dsh-working-activity/client.js. The entry contributes into the

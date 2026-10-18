@@ -25,6 +25,8 @@ export interface ElapsedTickView {
   readonly phase: 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
   /** Wall clock the current phase began (the tool counter counts from it). */
   readonly phaseStartedAt: number
+  /** Wall clock the displayed tool started, when it differs from the phase start. */
+  readonly toolStartedAt?: number
   /** Wall clock the current turn began (the elapsed counter counts from it). */
   readonly turnStartedAt: number
   /** Language the host rendered `line` in. */
@@ -70,7 +72,9 @@ export function refreshElapsedSuffix(line: string, view: ElapsedTickView, nowMs:
   // The tool counter counts from the phase's entry; with concurrent tools the
   // host's own counter tracks the OLDEST one, so this may trail it by the
   // overlap — a display nuance, not a wrong number.
-  const since = view.phase === 'tool' ? view.phaseStartedAt : view.turnStartedAt
+  const since = view.phase === 'tool'
+    ? (view.toolStartedAt ?? view.phaseStartedAt)
+    : view.turnStartedAt
   if (!(since > 0)) return line
   const elapsed = Math.max(0, nowMs - since)
   const replacement = view.phase === 'tool'

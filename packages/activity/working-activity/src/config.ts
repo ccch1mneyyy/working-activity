@@ -28,6 +28,15 @@ export const FEATURE_FLAGS = [
   'failPhrases',      // 失败文案池
   'modelQuips',       // 模型切换梗
   'continuePhrases',  // 打断后接梗
+  'context',          // 上下文占用徽章
+  'todos',            // 待办进度徽章
+  'jobs',             // 后台任务徽章
+  'subagents',        // 子代理徽章
+  'team',             // Agent Teams 徽章
+  'goal',             // 目标进度徽章
+  'plan',             // 计划模式徽章
+  'queue',            // 待处理输入排队
+  'tokens',           // 收尾 token 统计
 ] as const
 
 /** Feature-flag name type. */
@@ -44,6 +53,15 @@ export const FEATURE_LABELS: Record<FeatureFlag, string> = {
   failPhrases: '失败文案',
   modelQuips: '模型切换梗',
   continuePhrases: '打断接梗',
+  context: '上下文占用',
+  todos: '待办进度',
+  jobs: '后台任务',
+  subagents: '子代理',
+  team: 'Agent Teams',
+  goal: '目标进度',
+  plan: '计划模式',
+  queue: '输入排队',
+  tokens: 'Token 统计',
 }
 
 /** The file-based config, same keys as the pi extension. */
@@ -58,6 +76,8 @@ export type WorkingActivityConfig = {
   narrate?: boolean
   /** Debug logging to `working-activity-debug.log`. */
   debugLog?: boolean
+  /** Master switch for the compact HUD suffix. */
+  hud?: boolean
   /** Context usage warning threshold in percent. */
   contextWarnAt?: number
   /** Context usage danger threshold in percent. */
@@ -139,6 +159,7 @@ export function parseWorkingActivityConfig(text: string): ConfigReadResult {
   }
   if (typeof raw.narrate === 'boolean') config.narrate = raw.narrate
   if (typeof raw.debugLog === 'boolean') config.debugLog = raw.debugLog
+  if (typeof raw.hud === 'boolean') config.hud = raw.hud
   if (typeof raw.contextWarnAt === 'number' && Number.isFinite(raw.contextWarnAt)
     && raw.contextWarnAt >= 0 && raw.contextWarnAt <= 100) {
     config.contextWarnAt = raw.contextWarnAt
@@ -172,5 +193,8 @@ export function parseWorkingActivityConfig(text: string): ConfigReadResult {
 export function featureOn(config: WorkingActivityConfig, name: FeatureFlag): boolean {
   const explicit = config.features?.[name]
   if (typeof explicit === 'boolean') return explicit
+  // Context pressure is functional information, so it survives minimal mode;
+  // the remaining switches follow the mode default.
+  if (name === 'context') return true
   return config.mode !== 'minimal'
 }

@@ -44,6 +44,7 @@ The same line is rendered on every surface that composes the plugin: the termina
 - **Phase-aware status line.** The line moves through `waiting` → `thinking` → `tool` → `done`. Each phase has its own copy, its own rotation cadence, and its own elapsed formatting; settled phases carry a fixed summary rather than a counter.
 - **Real tool activity.** A running tool is rendered as *verb + argument detail + elapsed* (`跑个命令 npm test · 12s`). Results are paired with calls by exact call id; failed tools get the failure copy and a `✗` marker.
 - **Turn summary.** On `turn/end` the line becomes `搞定 ✓ · 4 工具 · 想12s 干11s` — tools completed, thinking time, and working time — and pins the last tool fragment briefly.
+- **Compact HUD.** A short suffix folds the session's operational facts into the line: context pressure (`ctx 62%`, `⚠` at the warning threshold, `⛔` at danger), todo progress (`2/5 待办`), running background jobs, direct subagents or Agent Team members, durable goal rounds, plan mode, queued input, and the turn's token total at `done`. Every signal is feature-flagged; a host that does not publish one simply renders nothing.
 - **Live self-narration.** With `narrate` on (the default), the plugin adds one short system-prompt contract asking the model to write a `⏵ …` line at the start of each step. The line is surfaced live in the status line while the durable message keeps it in the transcript.
 - **Bilingual, feature-flagged copy.** Chinese and English pools, day/night variants, long-thinking tiers, weekend and holiday copy, rare eggs, tool combos, model-switch quips, and failure copy are each switchable. `phrases: false` or `mode: minimal` renders plain functional labels.
 - **Non-invasive by construction.** The plugin registers no tools, appends no surface events, and never enters derived model history. Its only prompt contribution is the optional narration contract.
@@ -52,11 +53,12 @@ The same line is rendered on every surface that composes the plugin: the termina
 
 ## How it works
 
-The node half keeps one `ActivityTracker` per session. It is fed from three inputs:
+The node half keeps one `ActivityTracker` per session. It is fed from four inputs:
 
 1. **Durable session events** — `turn/start`, `step/start`, `assistant/message`, `tool/call`, `tool/result`, `turn/end`, `assistant/attempt`, `model/selection`, compaction and approval/retry signals.
 2. **Live assistant-stream frames** — `agent/assistant-stream` (`start` / `chunk` / `end`), which carry streamed deltas, the first-token instant, and the `⏵` narration on the current host line.
 3. **Agent status** — `agent/status` (`idle` / `running`).
+4. **HUD feature events** — `request/context` (route context window), `todo/write`, `job/registered` / `job/settled`, `subagent/catalog`, `team/member` / `team/task`, `goal/change`, `plan/mode`, and `agent/inbox/spliced`. Missing features on older host lines are capability absence, not corruption: the badge is omitted.
 
 The tracker renders a plain-text line and exposes the same value in two directions:
 
@@ -176,16 +178,21 @@ All keys are optional; the schema defaults below apply. Override them on the `wo
 | `narrate` | `boolean` | `true` | Inject the `⏵` self-narration contract into the system prompt and surface the extracted line. Set `false` for a purely event-derived line. |
 | `lang` | `'auto' \| 'zh' \| 'en'` | `'auto'` | Copy language. `auto` resolves `DSH_TUI_LANG` → `~/.dsh-tui/lang.json` → OS locale → `zh`. |
 | `frames` | `string` | `'moon8'` | Frame preset name. Informational for UI consumers; `dsh-tui` resolves the persisted frame choice itself. |
-| `mode` | `'lively' \| 'minimal'` | `'lively'` | `minimal` keeps functional information only (plain labels, no playful pools). |
+| `mode` | `'lively' \| 'minimal'` | `'lively'` | `minimal` keeps functional information only (plain labels, no playful pools); the context HUD remains. |
 | `features` | `object` | `{}` | Per-feature switches; explicit values override `mode` defaults. |
 | `customPhrases` | `string[]` | `[]` | Extra thinking phrases appended to the base pool. |
 | `showTokPerSec` | `boolean` | `false` | Show an estimated `~tok/s` prefix while streaming. The value is derived from delta text, not provider usage. |
 | `workRemindAt` | `number` | `0` | After this many hours of accumulated work, surface a break reminder (0–24; `0` disables). |
+| `hud` | `boolean` | `true` | Master switch for the compact HUD suffix. `false` hides every badge. |
+| `contextWarnAt` | `number` | `80` | Context-pressure percentage that adds `⚠` to the `ctx` badge. |
+| `contextDangerAt` | `number` | `95` | Context-pressure percentage that adds `⛔` instead. |
 | `debugLog` | `boolean` | `false` | Append a JSON trace of each distinct rendered line to `~/.dsh-tui/working-activity-debug.log` (or `DSH_WORKING_ACTIVITY_DEBUG_LOG`). |
 
 Feature flags accepted by `features` and honoured by the tracker:
 
-`phrases`, `rareEggs`, `nightPhrases`, `weekend`, `holidays`, `combo`, `failPhrases`, `modelQuips`, `continuePhrases`.
+`phrases`, `rareEggs`, `nightPhrases`, `weekend`, `holidays`, `combo`, `failPhrases`, `modelQuips`, `continuePhrases`, `context`, `todos`, `jobs`, `subagents`, `team`, `goal`, `plan`, `queue`, `tokens`.
+
+The HUD switches default on in `lively` mode. `minimal` keeps `context` (the warning is functional) and turns the rest off unless an explicit `features` entry enables it. The suffix is capped at four badges (five at `done`) and ordered by operational priority: context, jobs, todos, team/subagents, goal, plan, queue, tokens.
 
 ## Projection contract
 
@@ -217,13 +224,16 @@ interface WorkingActivityView {
   phrase?: string         // current playful phrase or ⏵ narration
   toolCount: number       // tools completed this turn
   phaseStartedAt: number  // epoch ms the current phase began
+  toolStartedAt?: number  // epoch ms the displayed (oldest) tool started
   turnStartedAt: number   // epoch ms the current turn began (0 when idle)
   updatedAt: number       // timestamp of the last folded event
   lang: 'zh' | 'en'       // language `line` was rendered in
 }
 ```
 
-Because the projection is event-driven, `line` can be older than the wall clock between folds. The wire value carries the timestamps so a client can re-tick the one moving segment; the Web and GUI halves do exactly that, and fall back to the host's text when the segment shape is unknown.
+Because the projection is event-driven, `line` can be older than the wall clock between folds. The wire value carries the timestamps so a client can re-tick the one moving segment; the Web and GUI halves do exactly that, and fall back to the host's text when the segment shape is unknown. A tool phase exposes `toolStartedAt` separately because the displayed tool is the OLDEST active one, while `phaseStartedAt` may have moved when a concurrent tool arrived.
+
+`view` reuses the previous wire object when every field is unchanged. The RC2 registry compares consecutive view results with `Object.is`; reusing the reference is what suppresses publication for internal-only state changes (for example the no-op portion of a step boundary).
 
 Read the value from a client plugin with the session standard kit:
 
@@ -282,6 +292,7 @@ Notes:
 - **Web UI** requires the `0.1.7-rc.2`, `0.2.0-rc.2`, or `0.2.1-rc.2` client cohort. The browser bundle is built against the RC2 shell seed table (`react`, `react/jsx-runtime`, `react-dom`, `@deepseek-ai/cordis`, `zod`, `@tanstack/react-virtual`, `@deepseek-ai/dsh-client-store`, `-ui-slots`, `-ui-primitives`, `-ui-dockkit`); the `0.1.7-rc.2` shell is a subset that also resolves the bundle's only value import, `react/jsx-runtime`.
 - **Desktop GUI** shares the Web entry: `platform: "web"`, the same dock seat, and the same projection. React 19 is covered by the peer range; the plugin itself runs inside the kernel Web client (React 18.3.1 on the current line), not the GUI host's React tree. The GUI must seed `react/jsx-runtime` and compose the three boot rows listed above. Run `pnpm run verify:gui` to check the GUI contract (the gate skips when the GUI checkout is absent).
 - **Legacy record consumers** (for example terminal UIs that replay the session log) can set `publish: true` on any supported line. On `0.2.x` this is an ignorable plugin record; on older lines it is the legacy `activity/status` event backed by the registration shim.
+- **HUD availability** is composition- and log-dependent: `request/context`, `todo/write`, `goal/change`, `plan/mode`, `team/*`, and `subagent/catalog` exist on the `0.1.2-alpha.2` line; `job/*` and `agent/inbox/spliced` appear on the `0.1.7+` line (not on `0.1.2-alpha.2`). A missing source renders no badge — never a guessed value.
 
 ## Architecture
 

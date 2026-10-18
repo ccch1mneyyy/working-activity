@@ -82,6 +82,120 @@ export function toActivityEvents(event: SessionEvent): readonly ActivityEvent[] 
   if (eventType === 'compaction/start') {
     return [{ kind: 'waiting-reason', at: event.time, reason: 'compaction' }]
   }
+  if (eventType === 'request/context') {
+    const window = (event.data as { contextWindow?: unknown }).contextWindow
+    if (typeof window !== 'number' || !Number.isFinite(window) || window <= 0) return []
+    return [{ kind: 'context-window', at: event.time, window }]
+  }
+  if (eventType === 'todo/write') {
+    const todos = (event.data as { todos?: unknown }).todos
+    if (!Array.isArray(todos)) return []
+    let done = 0
+    let inProgress = 0
+    for (const item of todos) {
+      const status = asRecord(item)?.status
+      if (status === 'completed') done += 1
+      else if (status === 'in_progress') inProgress += 1
+    }
+    return [{
+      kind: 'todo-write',
+      at: event.time,
+      counts: { done, total: todos.length, inProgress },
+    }]
+  }
+  if (eventType === 'job/registered') {
+    const data = event.data as {
+      jobId?: unknown
+      kind?: unknown
+      label?: unknown
+      startedAt?: unknown
+    }
+    const id = asString(data.jobId)
+    if (id === undefined) return []
+    return [{
+      kind: 'job-start',
+      at: event.time,
+      job: {
+        id,
+        kind: asString(data.kind) ?? 'job',
+        label: asString(data.label) ?? '',
+        startedAt: finiteNumber(data.startedAt) ?? event.time,
+      },
+    }]
+  }
+  if (eventType === 'job/settled') {
+    const id = asString((event.data as { jobId?: unknown }).jobId)
+    return id === undefined ? [] : [{ kind: 'job-end', at: event.time, jobId: id }]
+  }
+  if (eventType === 'subagent/catalog') {
+    const data = event.data as { childId?: unknown; mode?: unknown; label?: unknown }
+    const id = asString(data.childId)
+    if (id === undefined) return []
+    const label = asString(data.label)
+    return [{
+      kind: 'subagent-catalog',
+      at: event.time,
+      subagent: {
+        id,
+        mode: asString(data.mode) ?? 'unknown',
+        ...(label === undefined ? {} : { label }),
+      },
+    }]
+  }
+  if (eventType === 'team/member') {
+    const member = asRecord((event.data as { member?: unknown }).member)
+    const id = asString(member?.id)
+    const phase = member?.phase
+    if (id === undefined || (phase !== 'provisioning' && phase !== 'active' && phase !== 'failed')) return []
+    return [{
+      kind: 'team-member',
+      at: event.time,
+      member: { id, name: asString(member?.name) ?? id, phase },
+    }]
+  }
+  if (eventType === 'team/task') {
+    const task = asRecord((event.data as { task?: unknown }).task)
+    const id = asString(task?.id)
+    const status = task?.status
+    if (id === undefined
+      || (status !== 'pending' && status !== 'in_progress' && status !== 'completed' && status !== 'deleted')) return []
+    return [{
+      kind: 'team-task',
+      at: event.time,
+      task: {
+        id,
+        status,
+        subject: asString(task?.subject) ?? '',
+      },
+    }]
+  }
+  if (eventType === 'goal/change') {
+    const data = event.data as { operation?: unknown; goal?: unknown; roundsStarted?: unknown }
+    if (data.operation === 'clear') return [{ kind: 'goal-change', at: event.time }]
+    const goal = asRecord(data.goal)
+    const phase = goal?.phase
+    if (phase !== 'active' && phase !== 'paused' && phase !== 'blocked' && phase !== 'complete') return []
+    const rounds = finiteNumber(data.roundsStarted) ?? 0
+    const maxRounds = finiteNumber(goal?.maxGoalRounds) ?? 0
+    return [{
+      kind: 'goal-change',
+      at: event.time,
+      goal: { phase, rounds: Math.max(0, rounds), maxRounds: Math.max(0, maxRounds) },
+    }]
+  }
+  if (eventType === 'agent/inbox/spliced') {
+    const data = event.data as { target?: unknown; removedCount?: unknown; inserted?: unknown }
+    const target = data.target
+    if (target !== 'next-turn' && target !== 'next-step') return []
+    const inserted = Array.isArray(data.inserted) ? data.inserted.length : 0
+    const removed = finiteNumber(data.removedCount) ?? 0
+    const delta = inserted - removed
+    return delta === 0 ? [] : [{ kind: 'queue-change', at: event.time, target, delta }]
+  }
+  if (eventType === 'plan/mode') {
+    const active = (event.data as { active?: unknown }).active
+    return typeof active === 'boolean' ? [{ kind: 'plan-mode', at: event.time, plan: { active } }] : []
+  }
   if (eventType === 'assistant/chunk') {
     // The pre-0.1.5 durable stream. `assistant/chunk` is absent from the
     // 0.2.x `SessionEventMap` the main build compiles against, so it is
@@ -192,4 +306,21 @@ function settledText(message: unknown): string {
     text += record.text
   }
   return text
+}
+
+
+/** Narrow `unknown` to a plain record: objects only, never `null`, never an array. */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
+}
+
+/** A non-empty string, or undefined for every other shape. */
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+/** A finite number, or undefined for every other shape. */
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }

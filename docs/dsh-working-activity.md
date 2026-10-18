@@ -16,6 +16,7 @@ npm 包 README（功能、配置、契约的权威文本）：[英文](../packag
 - **收尾统计**：`turn/end` 后显示 `搞定 ✓ · N 工具 · 想Xs 干Ys`，并短暂钉住最后一个工具片段。
 - **模型自述**：`narrate: true` 时注入 `⏵` 约定，实时提取并展示；聊天正文是否隐藏该行由界面决定，日志保留。
 - **双语与特性开关**：`lang: auto | zh | en`；`mode: minimal` 或逐特性 `features` 开关。
+- **紧凑 HUD**：`ctx 62%`（阈值加 `⚠` / `⛔`）、`2/5 待办`、后台任务、子代理 / Agent Team、目标轮次、计划模式、排队输入，以及收尾 token 总量；逐项 `features` 开关，宿主没有的信号直接省略。
 - **两条出口**：`workingActivity` 会话投影（TUI / Web UI / GUI，不写日志）；可选的工作状态日志记录（`publish: true`，供日志重放型消费者；`0.2.x` 上是 ignorable 的 `plugin:working-activity/status` 记录，旧线降级为 legacy `activity/status` 事件）。
 
 ## 目录结构
@@ -138,9 +139,30 @@ Web 端只有一段：客户端条目随 npm 包分发（`lib/client.js`）。We
 | `customPhrases` | `string[]` | `[]` | 追加思考短语 |
 | `showTokPerSec` | `boolean` | `false` | 流式 `~tok/s` 估算 |
 | `workRemindAt` | `number` | `0` | 累计活跃 N 小时提醒休息（0–24，0 关闭） |
+| `hud` | `boolean` | `true` | 紧凑 HUD 总开关；`false` 隐藏全部徽章 |
+| `contextWarnAt` | `number` | `80` | 上下文压力达到该百分比时加 `⚠` |
+| `contextDangerAt` | `number` | `95` | 达到该百分比时改用 `⛔` |
 | `debugLog` | `boolean` | `false` | 渲染行 JSON 追踪日志（`~/.dsh-tui/working-activity-debug.log` 或 `DSH_WORKING_ACTIVITY_DEBUG_LOG`） |
 
-`features` 支持：`phrases`、`rareEggs`、`nightPhrases`、`weekend`、`holidays`、`combo`、`failPhrases`、`modelQuips`、`continuePhrases`。
+`features` 支持：`phrases`、`rareEggs`、`nightPhrases`、`weekend`、`holidays`、`combo`、`failPhrases`、`modelQuips`、`continuePhrases`、`context`、`todos`、`jobs`、`subagents`、`team`、`goal`、`plan`、`queue`、`tokens`。
+
+### HUD 信号
+
+HUD 是状态行末尾的紧凑操作信息，不是第二个状态行。它从宿主日志自行折叠，不依赖其他 projection：
+
+| 信号 | 来源 | 展示 |
+|---|---|---|
+| 上下文压力 | `request/context.contextWindow` + `assistant/message.usage` 的 prompt 桶 | `ctx 62%`；`contextWarnAt` / `contextDangerAt` 控制 `⚠` / `⛔` |
+| 待办 | `todo/write` whole-list snapshot | `2/5 待办` |
+| 后台任务 | `job/registered` / `job/settled`（0.1.7+） | `1 任务` |
+| 子代理 | `subagent/catalog` | `1 子代理` |
+| Agent Team | `team/member` / `team/task` | `1 团队`（优先于子代理徽章） |
+| 目标 | `goal/change` | `目标 2/10`，完成后隐藏 |
+| 计划模式 | `plan/mode` | `计划` |
+| 排队输入 | `agent/inbox/spliced`（0.1.7+） | `+2 排队` |
+| 收尾 token | 本回合 `assistant/message.usage` | `1.5k tok`（仅 done） |
+
+`lively` 默认显示全部可用信号；`minimal` 只保留 `context`，其余需显式 `features` 打开。后缀最多四个徽章（`done` 五个），按 context → jobs → todos → team/subagents → goal → plan → queue → tokens 优先排序。`hud: false` 关闭全部。
 
 ## 投影契约
 
@@ -173,13 +195,16 @@ interface WorkingActivityView {
   phrase?: string
   toolCount: number
   phaseStartedAt: number
+  toolStartedAt?: number   // 当前展示的（最旧）工具开始时刻
   turnStartedAt: number
   updatedAt: number
   lang: 'zh' | 'en'
 }
 ```
 
-`line` 是宿主折叠时的原文；`live` 表示该值对应的相位仍在进行、客户端可以本地重算耗时；`updatedAt` 是最后一次折叠事件的会话时间，用作新鲜度信号。
+`line` 是宿主折叠时的原文；`live` 表示该值对应的相位仍在进行、客户端可以本地重算耗时；`updatedAt` 是最后一次折叠事件的会话时间，用作新鲜度信号。`toolStartedAt` 单独存在，因为并发工具时展示的是最旧工具，而 `phaseStartedAt` 可能已被新工具更新。
+
+`view` 在连续读取字段完全相同时复用上一个 wire 对象；RC2 注册表用 `Object.is` 抑制“内部变化但展示值不变”的多余发布。
 
 ## 会话记录契约
 
