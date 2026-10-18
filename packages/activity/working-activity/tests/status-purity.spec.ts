@@ -85,9 +85,9 @@ describe('a read is a function of the state', () => {
   })
 
   it('leaves a stable snapshot version for persistent checkpoints', () => {
-    // v7: the HUD signal state (context pressure, todos, jobs, subagents,
-    // teams, goal, plan) joined the snapshot; v6 added live `firstTokenAt`.
-    expect(TRACKER_SNAPSHOT_VERSION).toBe(7)
+    // v8: the task timer (start/end, per-task aggregates) joined; v7 added the
+    // HUD signal state; v6 added the live `firstTokenAt`.
+    expect(TRACKER_SNAPSHOT_VERSION).toBe(8)
   })
 })
 

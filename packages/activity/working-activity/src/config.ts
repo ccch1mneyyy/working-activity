@@ -36,7 +36,6 @@ export const FEATURE_FLAGS = [
   'goal',             // 目标进度徽章
   'plan',             // 计划模式徽章
   'queue',            // 待处理输入排队
-  'tokens',           // 收尾 token 统计
 ] as const
 
 /** Feature-flag name type. */
@@ -61,7 +60,6 @@ export const FEATURE_LABELS: Record<FeatureFlag, string> = {
   goal: '目标进度',
   plan: '计划模式',
   queue: '输入排队',
-  tokens: 'Token 统计',
 }
 
 /** The file-based config, same keys as the pi extension. */

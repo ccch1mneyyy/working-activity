@@ -43,8 +43,9 @@ The same line is rendered on every surface that composes the plugin: the termina
 
 - **Phase-aware status line.** The line moves through `waiting` → `thinking` → `tool` → `done`. Each phase has its own copy, its own rotation cadence, and its own elapsed formatting; settled phases carry a fixed summary rather than a counter.
 - **Real tool activity.** A running tool is rendered as *verb + argument detail + elapsed* (`跑个命令 npm test · 12s`). Results are paired with calls by exact call id; failed tools get the failure copy and a `✗` marker.
-- **Turn summary.** On `turn/end` the line becomes `搞定 ✓ · 4 工具 · 想12s 干11s` — tools completed, thinking time, and working time — and pins the last tool fragment briefly.
-- **Compact HUD.** A short suffix folds the session's operational facts into the line: context pressure (`ctx 62%`, `⚠` at the warning threshold, `⛔` at danger), todo progress (`2/5 待办`), running background jobs, direct subagents or Agent Team members, durable goal rounds, plan mode, queued input, and the turn's token total at `done`. Every signal is feature-flagged; a host that does not publish one simply renders nothing.
+- **Turn summary.** On `turn/end` the line becomes `搞定 ✓ · 4 工具 · 总1m23s · 想12s 干11s` — tools completed, thinking time, and working time — and pins the last tool fragment briefly.
+- **Task-level elapsed.** The `总` counter is the whole task, not the current message turn. A task spans consecutive turns while a next-turn message is queued during a running turn — exactly what a user interjection produces; a turn that ends with an empty queue closes the task, so the next turn starts a new one. The done summary aggregates tools, thinking/working time and tokens across that task. This boundary uses the durable `agent/inbox/spliced` events (`0.1.7+`); older lines without that signal keep a per-turn counter.
+- **Compact HUD.** A short suffix folds the session's operational facts into the line: context pressure (`ctx 62%`, `⚠` at the warning threshold, `⛔` at danger), todo progress (`2/5 待办`), running background jobs, direct subagents or Agent Team members, durable goal rounds, plan mode, and queued input. Every signal is feature-flagged; a host that does not publish one simply renders nothing.
 - **Live self-narration.** With `narrate` on (the default), the plugin adds one short system-prompt contract asking the model to write a `⏵ …` line at the start of each step. The line is surfaced live in the status line while the durable message keeps it in the transcript.
 - **Bilingual, feature-flagged copy.** Chinese and English pools, day/night variants, long-thinking tiers, weekend and holiday copy, rare eggs, tool combos, model-switch quips, and failure copy are each switchable. `phrases: false` or `mode: minimal` renders plain functional labels.
 - **Non-invasive by construction.** The plugin registers no tools, appends no surface events, and never enters derived model history. Its only prompt contribution is the optional narration contract.
@@ -70,7 +71,7 @@ The tracker renders a plain-text line and exposes the same value in two directio
 | `waiting` | A turn is open and the model has not produced a token yet | `等待模型响应 · 总3s` |
 | `thinking` | A live token or reasoning delta arrived | `嗯…让我捋捋 · 总12s` |
 | `tool` | A `tool/call` is pending its result | `跑个命令 npm test · 12s` |
-| `done` | The turn closed | `搞定 ✓ · 4 工具 · 想12s 干11s` |
+| `done` | The turn closed | `搞定 ✓ · 4 工具 · 总1m23s · 想12s 干11s` |
 | `idle` | No turn is active | *(nothing rendered)* |
 
 ## Requirements
@@ -190,9 +191,9 @@ All keys are optional; the schema defaults below apply. Override them on the `wo
 
 Feature flags accepted by `features` and honoured by the tracker:
 
-`phrases`, `rareEggs`, `nightPhrases`, `weekend`, `holidays`, `combo`, `failPhrases`, `modelQuips`, `continuePhrases`, `context`, `todos`, `jobs`, `subagents`, `team`, `goal`, `plan`, `queue`, `tokens`.
+`phrases`, `rareEggs`, `nightPhrases`, `weekend`, `holidays`, `combo`, `failPhrases`, `modelQuips`, `continuePhrases`, `context`, `todos`, `jobs`, `subagents`, `team`, `goal`, `plan`, `queue`.
 
-The HUD switches default on in `lively` mode. `minimal` keeps `context` (the warning is functional) and turns the rest off unless an explicit `features` entry enables it. The suffix is capped at four badges (five at `done`) and ordered by operational priority: context, jobs, todos, team/subagents, goal, plan, queue, tokens.
+The HUD switches default on in `lively` mode. `minimal` keeps `context` (the warning is functional) and turns the rest off unless an explicit `features` entry enables it. The suffix is capped at four badges (five at `done`) and ordered by operational priority: context, jobs, todos, team/subagents, goal, plan, queue.
 
 ## Projection contract
 
@@ -225,13 +226,14 @@ interface WorkingActivityView {
   toolCount: number       // tools completed this turn
   phaseStartedAt: number  // epoch ms the current phase began
   toolStartedAt?: number  // epoch ms the displayed (oldest) tool started
+  taskStartedAt?: number  // epoch ms the current task began (spans interjections)
   turnStartedAt: number   // epoch ms the current turn began (0 when idle)
   updatedAt: number       // timestamp of the last folded event
   lang: 'zh' | 'en'       // language `line` was rendered in
 }
 ```
 
-Because the projection is event-driven, `line` can be older than the wall clock between folds. The wire value carries the timestamps so a client can re-tick the one moving segment; the Web and GUI halves do exactly that, and fall back to the host's text when the segment shape is unknown. A tool phase exposes `toolStartedAt` separately because the displayed tool is the OLDEST active one, while `phaseStartedAt` may have moved when a concurrent tool arrived.
+Because the projection is event-driven, `line` can be older than the wall clock between folds. The wire value carries the timestamps so a client can re-tick the one moving segment; the Web and GUI halves do exactly that, and fall back to the host's text when the segment shape is unknown. A tool phase exposes `toolStartedAt` separately because the displayed tool is the OLDEST active one, while `phaseStartedAt` may have moved when a concurrent tool arrived. Non-tool phases tick `总` from `taskStartedAt`; `turnStartedAt` remains the current turn's start for per-turn metadata.
 
 `view` reuses the previous wire object when every field is unchanged. The RC2 registry compares consecutive view results with `Object.is`; reusing the reference is what suppresses publication for internal-only state changes (for example the no-op portion of a step boundary).
 

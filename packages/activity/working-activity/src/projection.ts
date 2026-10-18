@@ -78,10 +78,12 @@ export interface WorkingActivityView {
   readonly phrase?: string
   /** Tools completed in the current turn. */
   readonly toolCount: number
-  /** Wall clock the current phase began (what a live `line` counts from). */
+  /** Wall clock the current phase began. */
   readonly phaseStartedAt: number
   /** Wall clock the displayed tool started, when the phase is `tool`. */
   readonly toolStartedAt?: number
+  /** Wall clock the current task started (spans user interjections). */
+  readonly taskStartedAt?: number
   /** Wall clock the current turn began (0 when no turn has started). */
   readonly turnStartedAt: number
   /**
@@ -119,6 +121,7 @@ const viewSchema = z.object({
   toolCount: z.number(),
   phaseStartedAt: z.number(),
   toolStartedAt: z.number().optional(),
+  taskStartedAt: z.number().optional(),
   turnStartedAt: z.number(),
   updatedAt: z.number(),
   lang: z.enum(['zh', 'en']),
@@ -176,6 +179,7 @@ function sameView(left: WorkingActivityView, right: WorkingActivityView): boolea
     && left.toolCount === right.toolCount
     && left.phaseStartedAt === right.phaseStartedAt
     && left.toolStartedAt === right.toolStartedAt
+    && left.taskStartedAt === right.taskStartedAt
     && left.turnStartedAt === right.turnStartedAt
     && left.updatedAt === right.updatedAt
     && left.lang === right.lang
@@ -252,6 +256,7 @@ export function createActivityProjection(options: ActivityProjectionOptions): {
       toolCount: rendered.toolCount,
       phaseStartedAt: rendered.phaseStartedAt,
       ...(rendered.toolStartedAt === undefined ? {} : { toolStartedAt: rendered.toolStartedAt }),
+      ...(rendered.taskStartedAt === undefined ? {} : { taskStartedAt: rendered.taskStartedAt }),
       // `ActivityState` reports elapsed rather than the turn's start instant.
       // The difference is exact, and a client needs the instant to keep
       // ticking; only the idle phase means "there is no turn" — an elapsed of

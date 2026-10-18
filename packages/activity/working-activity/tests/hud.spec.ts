@@ -107,13 +107,6 @@ describe('workload badges', () => {
     expect(line).toContain('目标 2/10')
     expect(line).toContain('计划')
   })
-
-  it('appends the turn token total at done', () => {
-    const state = tracker()
-    state.onEvent({ kind: 'assistant-settled', at: START + 100, usage: usage(1_000, 500) })
-    state.onEvent({ kind: 'turn-end', at: START + 200 })
-    expect(state.render(START + 200).line).toContain('1.5k tok')
-  })
 })
 
 describe('HUD feature gates', () => {

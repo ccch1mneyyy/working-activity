@@ -30,7 +30,7 @@ export type ActivityPhase = 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
  * persisted projection checkpoint from an older build is discarded (the host
  * refolds the log) instead of being misread as the new shape.
  */
-export const TRACKER_SNAPSHOT_VERSION = 7
+export const TRACKER_SNAPSHOT_VERSION = 8
 
 /** One snapshot of the model's activity, renderable by any UI. */
 export interface ActivityState {
@@ -58,6 +58,10 @@ export interface ActivityState {
    * counter needs this exact anchor.
    */
   readonly toolStartedAt?: number
+  /** Wall clock the current task (across user interjections) started. */
+  readonly taskStartedAt?: number
+  /** Elapsed time of the current task at render time. */
+  readonly taskElapsedMs?: number
 }
 
 /** Per-turn thinking/tooling split, exposed for done summaries and stats. */
@@ -104,8 +108,6 @@ export interface TrackerFeatures {
   readonly plan?: boolean
   /** Queued-input HUD badge. */
   readonly queue?: boolean
-  /** Completed-turn token HUD badge. */
-  readonly tokens?: boolean
 }
 
 /** Configuration knobs for the state machine (subset of plugin Config). */
@@ -215,6 +217,16 @@ interface TrackerSnapshotShape {
   readonly planActive: boolean
   readonly queueNextTurn: number
   readonly queueNextStep: number
+  readonly taskStartedAt: number
+  readonly taskEndedAt: number
+  readonly taskClosed: boolean
+  readonly taskTurnCount: number
+  readonly taskThinkingMs: number
+  readonly taskToolMs: number
+  readonly taskToolCount: number
+  readonly taskTokens: number
+  readonly taskSubagentCount: number
+  readonly taskMaxStreak: number
 }
 
 /** Format one tool into its display fragment (`跑个命令 npm test`). */
@@ -399,6 +411,23 @@ export class ActivityTracker {
   /** Queued input counts, by inbox target. */
   private queueNextTurn = 0
   private queueNextStep = 0
+  /**
+   * Task timer. A task spans consecutive turns while queued next-turn input
+   * remains: that is what a user interjection during a running turn produces.
+   * A turn that ends with no queued input closes the task; the next turn is a
+   * new task. Durable queue events make this work in a replayed projection too,
+   * where `agent/status` is unavailable.
+   */
+  private taskStartedAt = 0
+  private taskEndedAt = 0
+  private taskClosed = false
+  private taskTurnCount = 0
+  private taskThinkingMs = 0
+  private taskToolMs = 0
+  private taskToolCount = 0
+  private taskTokens = 0
+  private taskSubagentCount = 0
+  private taskMaxStreak = 0
 
   /**
    * @param config - Behavioral knobs.
@@ -414,6 +443,13 @@ export class ActivityTracker {
   /** Agent transitioned to running/idle. */
   onAgentStatus(status: 'idle' | 'running'): void {
     if (status === 'idle') {
+      // A live host can go idle with a canceled queue and no further durable
+      // event; close the task at this point so its timer cannot run forever.
+      if (this.taskStartedAt > 0 && !this.taskClosed
+        && this.queueNextTurn + this.queueNextStep === 0) {
+        this.taskClosed = true
+        this.taskEndedAt = this.now()
+      }
       // The turn end already moved us to the done phase; idle only clears the
       // lingering done card after its display window.
       if (this.phase !== 'done') this.phase = 'idle'
@@ -481,6 +517,24 @@ export class ActivityTracker {
     switch (event.kind) {
       case 'turn-start': {
         const at = event.at
+        // A turn begins either a new task or a continuation of the current one.
+        // The durable queue is the boundary: input queued while a turn was
+        // running keeps the task open across the turn break; a turn that ended
+        // with an empty queue closed the task, so this start is a new task.
+        if (this.taskStartedAt === 0 || this.taskClosed) {
+          this.taskStartedAt = at
+          this.taskEndedAt = 0
+          this.taskClosed = false
+          this.taskTurnCount = 1
+          this.taskThinkingMs = 0
+          this.taskToolMs = 0
+          this.taskToolCount = 0
+          this.taskTokens = 0
+          this.taskSubagentCount = 0
+          this.taskMaxStreak = 0
+        } else {
+          this.taskTurnCount += 1
+        }
         this.turnStartedAt = at
         this.thinkingStartedAt = at
         this.thinkingMs = 0
@@ -675,6 +729,13 @@ export class ActivityTracker {
         const next = Math.max(0, current + event.delta)
         if (event.target === 'next-turn') this.queueNextTurn = next
         else this.queueNextStep = next
+        // A queued interjection may be canceled before it starts the next turn.
+        // Once the visible turn is done and the queue is empty, close the task.
+        if (this.phase === 'done' && this.queueNextTurn + this.queueNextStep === 0
+          && this.taskStartedAt > 0 && !this.taskClosed) {
+          this.taskClosed = true
+          this.taskEndedAt = event.at
+        }
         return
       }
       case 'turn-end': {
@@ -687,6 +748,23 @@ export class ActivityTracker {
           this.activeTools.clear()
         } else if (this.phase === 'thinking' || this.phase === 'waiting') {
           this.thinkingMs += Math.max(0, at - this.thinkingStartedAt)
+        }
+        // Aggregate this turn into the task summary. A turn is only a task
+        // boundary when no next-turn input is waiting: that queue is precisely
+        // what an interjection during the running turn produces.
+        if (this.taskStartedAt === 0) {
+          this.taskStartedAt = this.turnStartedAt || at
+          this.taskTurnCount = 1
+        }
+        this.taskThinkingMs += this.thinkingMs
+        this.taskToolMs += this.toolMs
+        this.taskToolCount += this.toolCount
+        this.taskTokens += this.turnTokens
+        this.taskSubagentCount += this.subagentCount
+        this.taskMaxStreak = Math.max(this.taskMaxStreak, this.maxStreak)
+        if (this.queueNextTurn === 0) {
+          this.taskClosed = true
+          this.taskEndedAt = at
         }
         // Draw the completion prefix ONCE so repeated renders of the done line
         // stay stable (a fresh random per render would make it flicker). The
@@ -742,7 +820,12 @@ export class ActivityTracker {
 
   /** Render the current status snapshot at a wall-clock instant. */
   render(nowMs: number = this.now()): ActivityState {
-    return this.withHud(this.renderBase(nowMs))
+    const state = this.renderBase(nowMs)
+    return this.withHud({
+      ...state,
+      ...(this.taskStartedAt > 0 ? { taskStartedAt: this.taskStartedAt } : {}),
+      taskElapsedMs: this.taskElapsedMs(nowMs),
+    })
   }
 
   /** Phase-specific render, before the compact HUD suffix. */
@@ -824,7 +907,7 @@ export class ActivityTracker {
   }
 
   /** Whether one HUD signal is enabled for this composition. */
-  private hudOn(feature: 'context' | 'todos' | 'jobs' | 'subagents' | 'team' | 'goal' | 'plan' | 'queue' | 'tokens'): boolean {
+  private hudOn(feature: 'context' | 'todos' | 'jobs' | 'subagents' | 'team' | 'goal' | 'plan' | 'queue'): boolean {
     const explicit = (this.config.features ?? {})[feature]
     if (typeof explicit === 'boolean') return explicit
     // Context pressure is functional information, so it survives minimal mode;
@@ -868,9 +951,6 @@ export class ActivityTracker {
     if (this.hudOn('queue')) {
       const queued = this.queueNextTurn + this.queueNextStep
       if (queued > 0) badges.push(zh ? `+${queued} 排队` : `+${queued} queued`)
-    }
-    if (phase === 'done' && this.hudOn('tokens') && this.turnTokens > 0) {
-      badges.push(`${fmtTokens(this.turnTokens)} tok`)
     }
     // The line is shared by TUI, WebUI, and GUI: keep the suffix scannable.
     return badges.slice(0, phase === 'done' ? 5 : 4).join(' · ')
@@ -941,6 +1021,16 @@ export class ActivityTracker {
       planActive: this.planActive,
       queueNextTurn: this.queueNextTurn,
       queueNextStep: this.queueNextStep,
+      taskStartedAt: this.taskStartedAt,
+      taskEndedAt: this.taskEndedAt,
+      taskClosed: this.taskClosed,
+      taskTurnCount: this.taskTurnCount,
+      taskThinkingMs: this.taskThinkingMs,
+      taskToolMs: this.taskToolMs,
+      taskToolCount: this.taskToolCount,
+      taskTokens: this.taskTokens,
+      taskSubagentCount: this.taskSubagentCount,
+      taskMaxStreak: this.taskMaxStreak,
     }
     return data
   }
@@ -1025,6 +1115,16 @@ export class ActivityTracker {
     tracker.planActive = data.planActive === true
     tracker.queueNextTurn = data.queueNextTurn ?? 0
     tracker.queueNextStep = data.queueNextStep ?? 0
+    tracker.taskStartedAt = data.taskStartedAt ?? 0
+    tracker.taskEndedAt = data.taskEndedAt ?? 0
+    tracker.taskClosed = data.taskClosed === true
+    tracker.taskTurnCount = data.taskTurnCount ?? 0
+    tracker.taskThinkingMs = data.taskThinkingMs ?? 0
+    tracker.taskToolMs = data.taskToolMs ?? 0
+    tracker.taskToolCount = data.taskToolCount ?? 0
+    tracker.taskTokens = data.taskTokens ?? 0
+    tracker.taskSubagentCount = data.taskSubagentCount ?? 0
+    tracker.taskMaxStreak = data.taskMaxStreak ?? 0
     return tracker
   }
 
@@ -1123,7 +1223,7 @@ export class ActivityTracker {
     const thinkingMs = this.phase === 'waiting'
       ? 0
       : this.thinkingMs + Math.max(0, nowMs - this.thinkingStartedAt)
-    const elapsed = fmtDuration(this.turnElapsedMs(nowMs))
+    const elapsed = fmtDuration(this.taskElapsedMs(nowMs))
     const elapsedLine = t('line-elapsed', { elapsed })
     // A tool that just settled keeps its own copy on screen for a beat. Measured
     // on real sessions: the median tool lasts 87 ms and 73% last under 500 ms, so
@@ -1359,11 +1459,21 @@ export class ActivityTracker {
   }
 
   private doneSummary(nowMs: number): { line: string; phrase?: string } {
-    const { thinkingMs, toolMs, toolCount } = this.stats()
-    const tokens = this.turnTokens > 0 ? ` · 🔥 ${fmtTokens(this.turnTokens)}` : ''
-    const sub = this.subagentCount > 0 ? ` · ${t('subagent-count', { count: this.subagentCount })}` : ''
-    const combo = (this.config.features ?? {}).combo !== false && this.maxStreak >= COMBO_SHOW_AT
-      ? ` · ${t('tool-streak', { count: this.maxStreak })}`
+    // Task-level totals: a task can span several turns when the user
+    // interjects while the agent is still working.
+    const thinkingMs = this.taskStartedAt > 0 ? this.taskThinkingMs : this.thinkingMs
+    const toolMs = this.taskStartedAt > 0 ? this.taskToolMs : this.toolMs
+    const toolCount = this.taskStartedAt > 0 ? this.taskToolCount : this.toolCount
+    const taskTokensTotal = this.taskStartedAt > 0 ? this.taskTokens : this.turnTokens
+    const tokens = taskTokensTotal > 0 ? ` · 🔥 ${fmtTokens(taskTokensTotal)}` : ''
+    const subCount = this.taskStartedAt > 0 ? this.taskSubagentCount : this.subagentCount
+    const sub = subCount > 0 ? ` · ${t('subagent-count', { count: subCount })}` : ''
+    const streak = this.taskStartedAt > 0 ? this.taskMaxStreak : this.maxStreak
+    const combo = (this.config.features ?? {}).combo !== false && streak >= COMBO_SHOW_AT
+      ? ` · ${t('tool-streak', { count: streak })}`
+      : ''
+    const total = this.taskStartedAt > 0
+      ? ` · ${t('line-elapsed', { elapsed: fmtDuration(this.taskElapsedMs(nowMs)) })}`
       : ''
     const tools = t(toolCount === 1 ? 'tool-count-one' : 'tool-count-many', { count: toolCount })
     // Sub-second splits read in milliseconds for the same reason a settled
@@ -1374,14 +1484,14 @@ export class ActivityTracker {
       tooling: durationLabel(toolMs),
     })
     if (!this.config.phrases) {
-      return { line: `${t('done-prefix')} · ${summary}${sub}${combo}${tokens}` }
+      return { line: `${t('done-prefix')} · ${summary}${total}${sub}${combo}${tokens}` }
     }
     const last = this.doneQueue.at(-1)
     if (last !== undefined && nowMs - last.endedAt < DONE_FRAGMENT_MS) {
       const fragment = toolFragment(last)
-      return { line: `${this.donePrefix} · ${fragment} · ${tools}${sub}${combo}${tokens}`, phrase: this.donePrefix }
+      return { line: `${this.donePrefix} · ${fragment} · ${tools}${total}${sub}${combo}${tokens}`, phrase: this.donePrefix }
     }
-    return { line: `${this.donePrefix} · ${summary}${sub}${combo}${tokens}`, phrase: this.donePrefix }
+    return { line: `${this.donePrefix} · ${summary}${total}${sub}${combo}${tokens}`, phrase: this.donePrefix }
   }
 
   /** The fresh self-narration line, or null once the stream has been quiet. */
@@ -1401,6 +1511,13 @@ export class ActivityTracker {
 
   private turnElapsedMs(nowMs: number): number {
     return this.turnStartedAt === 0 ? 0 : Math.max(0, nowMs - this.turnStartedAt)
+  }
+
+  /** Elapsed time of the whole task, frozen at the turn that closed it. */
+  private taskElapsedMs(nowMs: number): number {
+    if (this.taskStartedAt === 0) return 0
+    const end = this.taskClosed && this.taskEndedAt > 0 ? this.taskEndedAt : nowMs
+    return Math.max(0, end - this.taskStartedAt)
   }
 
   /** Drop the current stall, whatever it was. */

@@ -281,7 +281,6 @@ export function apply(ctx: Context, config: Config = {}): void {
       goal: on('goal'),
       plan: on('plan'),
       queue: on('queue'),
-      tokens: on('tokens'),
     },
     customPhrases: resolved.customPhrases,
     showTokPerSec: resolved.showTokPerSec,
