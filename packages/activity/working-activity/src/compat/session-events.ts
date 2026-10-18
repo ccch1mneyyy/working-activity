@@ -5,12 +5,12 @@
  * `./tool-result.ts` for the tool-result payload), so a host-line change stays
  * a one-file fix and the state machine keeps consuming meaning only.
  *
- * Measured on the DSH `0.1.7-rc.2` line: `assistant/chunk` no longer exists in
- * `SessionEventMap` or in `KNOWN_SESSION_EVENT_TYPES` (live deltas arrive as
- * transient `agent/assistant-stream` frames instead), so the mapping below is
- * the legacy path kept for replaying older logs. It must stay: sessions
- * written by pre-0.1.5 hosts still carry those events, and replaying them is
- * the only way a resuming user sees the same line they would have seen live.
+ * Measured on the DSH `0.1.7-rc.2` and `0.2.x` lines: `assistant/chunk` no
+ * longer exists in `SessionEventMap` or in `KNOWN_SESSION_EVENT_TYPES` (live
+ * deltas arrive as transient `agent/assistant-stream` frames instead), so the
+ * mapping below is the legacy path kept for replaying older logs. It must stay:
+ * sessions written by pre-0.1.5 hosts still carry those events, and replaying
+ * them is the only way a resuming user sees the same line they saw live.
  * @module @deepseek-ai/dsh-working-activity/compat/session-events
  */
 
@@ -31,11 +31,9 @@ const INTERRUPTED_REASONS: readonly string[] = ['aborted', 'interrupted']
  * @returns the domain events this host event carries, in order.
  */
 export function toActivityEvents(event: SessionEvent): readonly ActivityEvent[] {
-  // `assistant/attempt` exists on the 0.1.5+ host lines only, and this package
-  // still compiles against `@deepseek-ai/dsh-session@0.1.0-rc.6`, where the
-  // member is absent from `SessionEventMap` — a literal `case` for it would not
-  // typecheck there (TS2367, no overlap). Comparing the widened string keeps one
-  // adapter serving every corridor.
+  // `assistant/attempt` exists on the 0.1.5+ host lines only. The main build
+  // compiles against `0.2.1-rc.2`, but the published package still runs on older
+  // session maps; comparing widened strings keeps one adapter serving them all.
   const eventType: string = event.type
   if (eventType === 'assistant/attempt') {
     // A PARTIAL settlement: the durable text may be shorter than what was
@@ -46,9 +44,9 @@ export function toActivityEvents(event: SessionEvent): readonly ActivityEvent[] 
   }
   if (eventType === 'model/selection') {
     // The selection the host validated for subsequent prompt assembly. Declared
-    // by the session controller's module merge, so it is absent from the
-    // rc.6-era `SessionEventMap` this package compiles against — compared as a
-    // widened string for the same reason `assistant/attempt` is.
+    // by the session controller's module merge, so it is absent from older
+    // `SessionEventMap` copies — compared as a widened string for the same
+    // reason `assistant/attempt` is.
     //
     // A selection without a usable model id says nothing about the route, and
     // the tracker deduplicates repeats, so every selection is forwarded here.
@@ -65,10 +63,10 @@ export function toActivityEvents(event: SessionEvent): readonly ActivityEvent[] 
     if (source?.kind !== 'compact-checkpoint') return []
     return [{ kind: 'compaction', at: event.time }]
   }
-  // The stall vocabulary (0.1.7-rc.2 `KNOWN_SESSION_EVENT_TYPES`; widened
-  // strings because the rc.6-era `SessionEventMap` this package compiles
-  // against predates them). Without these the line cannot tell "waiting on the
-  // model" from "the model is waiting on YOU".
+  // The stall vocabulary (0.1.7-rc.2+ `KNOWN_SESSION_EVENT_TYPES`; widened
+  // strings because older `SessionEventMap` copies predate them). Without these
+  // the line cannot tell "waiting on the model" from "the model is waiting on
+  // YOU".
   if (eventType === 'llm/retry' || eventType === 'llm/retry-started') {
     // The provider pushed back (rate limit / transient error); the host backs
     // off before another attempt.
@@ -84,25 +82,31 @@ export function toActivityEvents(event: SessionEvent): readonly ActivityEvent[] 
   if (eventType === 'compaction/start') {
     return [{ kind: 'waiting-reason', at: event.time, reason: 'compaction' }]
   }
+  if (eventType === 'assistant/chunk') {
+    // The pre-0.1.5 durable stream. `assistant/chunk` is absent from the
+    // 0.2.x `SessionEventMap` the main build compiles against, so it is
+    // read structurally (widened string) instead of as a `case`: a literal case
+    // would be a TS2678 error here and a TS2367 error on the rc.6 corridor.
+    // Old logs still replay through this path.
+    const chunk = (event.data as { chunk?: { type?: unknown; text?: unknown } }).chunk
+    if (chunk === undefined) return []
+    // Only text and reasoning deltas carry displayable model output; the other
+    // chunk kinds (usage, finish, block boundaries, tool-call deltas) never
+    // reached the tracker's state even when this event was live.
+    if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return []
+    if (typeof chunk.text !== 'string' || chunk.text.length === 0) return []
+    return [{
+      kind: 'stream-delta',
+      at: event.time,
+      stream: chunk.type === 'text-delta' ? 'text' : 'reasoning',
+      text: chunk.text,
+    }]
+  }
   switch (event.type) {
     case 'turn/start':
       return [{ kind: 'turn-start', at: event.time }]
     case 'step/start':
       return [{ kind: 'step-start', at: event.time }]
-    case 'assistant/chunk': {
-      const chunk = event.data.chunk
-      // Only text and reasoning deltas carry displayable model output; the
-      // other chunk kinds (usage, finish, block boundaries, tool-call deltas)
-      // never reached the tracker's state even when this event was live.
-      if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return []
-      if (chunk.text.length === 0) return []
-      return [{
-        kind: 'stream-delta',
-        at: event.time,
-        stream: chunk.type === 'text-delta' ? 'text' : 'reasoning',
-        text: chunk.text,
-      }]
-    }
     case 'assistant/message': {
       const usage = event.data.usage
       const normalized = usage === undefined ? undefined : normalizeUsage(usage)

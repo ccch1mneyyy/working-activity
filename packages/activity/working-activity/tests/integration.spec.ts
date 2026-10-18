@@ -2,22 +2,16 @@
  * Full-loop integration: a scripted mock model drives the REAL working-activity
  * plugin through the agent loop. Only the model is mocked; the plugin, the
  * session log, and the append guard are real. This is the regression net for
- * the synchronous-append reentry bug: activity/status publishes deferred into a
- * microtask must land for every phase transition, including fast tools.
- *
- * If this suite fails to LOAD (rather than failing an assertion) with
- * "`@deepseek-ai/dsh-settings` does not provide an export named
- * `installSettingsSection`", the rc.6 development corridor drifted: that peer
- * was resolved up into the 0.1.7 line, which dropped the API this testkit calls.
- * The fix is the `overrides` pin in `pnpm-workspace.yaml` (its comment has the
- * full story) — not adapting this test to the newer API.
+ * the synchronous-append reentry bug and for the current ignorable plugin-record
+ * publishing path: snapshots deferred into a microtask must land for every
+ * phase transition, including fast tools.
  * @module @deepseek-ai/dsh-working-activity/tests/integration
  */
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionId, pluginRecordOf, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
@@ -43,9 +37,24 @@ interface ActivitySnapshot {
   phaseStartedAt: number
 }
 
-/** Narrow by the event's type tag (SessionEvent is a mapped type, not a union). */
+/**
+ * Published snapshots in either durable spelling: the current ignorable
+ * `plugin:working-activity/status` record on 0.2.x, or the legacy
+ * `activity/status` event older corridors still write.
+ */
 function activityEvents(log: readonly SessionEvent[]): Array<SessionEvent & { data: ActivitySnapshot }> {
-  return log.filter(event => event.type === 'activity/status').map(event => event as unknown as SessionEvent & { data: ActivitySnapshot })
+  const events: Array<SessionEvent & { data: ActivitySnapshot }> = []
+  for (const event of log) {
+    if (event.type === 'activity/status') {
+      events.push(event as unknown as SessionEvent & { data: ActivitySnapshot })
+      continue
+    }
+    const record = pluginRecordOf(event)
+    if (record?.type === 'plugin:working-activity/status') {
+      events.push({ ...event, data: record.data } as unknown as SessionEvent & { data: ActivitySnapshot })
+    }
+  }
+  return events
 }
 
 async function harness(adapter: MockAdapter): Promise<Context> {
@@ -103,14 +112,20 @@ describe('working-activity through the agent loop', () => {
       textResponse('Done listing.'),
     ])
     const ctx = await harness(adapter)
-    const agent = ctx.agentLoop.create(SessionId('it-activity'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-activity'), { provider: 'mock', model: 'mock' })
 
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'list files' }], source: { kind: 'user' } }))
     await waitForIdle(ctx, agent)
     await flushPublishes()
 
-    const events = activityEvents(agent.session.events)
+    const log = agent.session.snapshotEvents()
+    const events = activityEvents(log)
     expect(events.length).toBeGreaterThan(0)
+    // The 0.2.x path writes ignorable plugin records, never the legacy
+    // `activity/status` event that older resume paths refuse.
+    expect(log.some(event => event.type === 'activity/status')).toBe(false)
+    expect(log.some(event => pluginRecordOf(event)?.type === 'plugin:working-activity/status')).toBe(true)
+    expect(events.every(event => event.ignorable === true)).toBe(true)
     const phases = events.map(event => event.data.phase)
     expect(phases).toContain('tool')
     expect(phases).toContain('thinking')
@@ -127,13 +142,13 @@ describe('working-activity through the agent loop', () => {
       textResponse('It failed.'),
     ])
     const ctx = await harness(adapter)
-    const agent = ctx.agentLoop.create(SessionId('it-activity-fail'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-activity-fail'), { provider: 'mock', model: 'mock' })
 
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'run failing command' }], source: { kind: 'user' } }))
     await waitForIdle(ctx, agent)
     await flushPublishes()
 
-    const done = activityEvents(agent.session.events).findLast(event => event.data.phase === 'done')
+    const done = activityEvents(agent.session.snapshotEvents()).findLast(event => event.data.phase === 'done')
     // Failure prefix draws from FAIL_PHRASES; assert the failure semantics.
     expect(done?.data.line).not.toContain('搞定')
   })
@@ -144,13 +159,13 @@ describe('working-activity through the agent loop', () => {
       textResponse('All done.'),
     ])
     const ctx = await harness(adapter)
-    const agent = ctx.agentLoop.create(SessionId('it-activity-json'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-activity-json'), { provider: 'mock', model: 'mock' })
 
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'think' }], source: { kind: 'user' } }))
     await waitForIdle(ctx, agent)
     await flushPublishes()
 
-    for (const event of activityEvents(agent.session.events)) {
+    for (const event of activityEvents(agent.session.snapshotEvents())) {
       const data = event.data as Record<string, unknown>
       expect(data.phase).toBeTruthy()
       // Idle bootstrap frames legitimately carry an empty line (see the
@@ -179,16 +194,20 @@ describe('working-activity through the agent loop', () => {
       textResponse('Done.'),
     ])
     const ctx = await harness(adapter)
-    const agent = ctx.agentLoop.create(SessionId('it-activity-narrate'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-activity-narrate'), { provider: 'mock', model: 'mock' })
 
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'look into it' }], source: { kind: 'user' } }))
     await waitForIdle(ctx, agent)
     await flushPublishes()
 
-    // The narration contract rides the assembled system prompt.
-    expect(adapter.requests[0]?.system).toContain('[状态栏]')
+    // The narration contract rides the assembled system prompt. On the 0.2.x
+    // line a loop-built request carries it as the leading system-role message
+    // instead of the one-shot `system` field.
+    const firstRequest = adapter.requests[0]
+    const promptText = `${firstRequest?.system ?? ''}\n${JSON.stringify(firstRequest?.messages ?? [])}`
+    expect(promptText).toContain('[状态栏]')
     // The streamed ⏵ line lands in the published status lines.
-    const lines = activityEvents(agent.session.events).map(event => event.data.line)
+    const lines = activityEvents(agent.session.snapshotEvents()).map(event => event.data.line)
     expect(lines.some(line => line.includes('⏵ 查一下报错原因'))).toBe(true)
   })
 })

@@ -13,8 +13,27 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// The stub session cannot host the real private record append, so route the
+// current publishing seam through its `append` recorder. This keeps the runtime
+// tests on the plugin-record path (the shipped 0.2.x behaviour) without a live
+// SessionStore.
+vi.mock('@deepseek-ai/dsh-session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@deepseek-ai/dsh-session')>()
+  return {
+    ...actual,
+    appendPluginRecord: (
+      session: { append(type: string, data: unknown): void },
+      type: string,
+      data: unknown,
+    ) => session.append(type, data),
+  }
+})
+
 import * as WorkingActivity from '../src/index.ts'
 import { setLangOverride } from '../src/lang.ts'
+
+const PLUGIN_RECORD_TYPE = 'plugin:working-activity/status'
 
 /** One published snapshot, as the stub session recorded it. */
 interface Published {
@@ -123,8 +142,8 @@ describe('per-session runtimes', () => {
     harness.event(harness.b.session, 'tool/call', { turn: 1, step: 1, callId: 'c1', name: 'bash', arguments: '{}' })
     await flush()
 
-    expect(harness.a.published.every(entry => entry.type === 'activity/status')).toBe(true)
-    expect(harness.b.published.every(entry => entry.type === 'activity/status')).toBe(true)
+    expect(harness.a.published.every(entry => entry.type === PLUGIN_RECORD_TYPE)).toBe(true)
+    expect(harness.b.published.every(entry => entry.type === PLUGIN_RECORD_TYPE)).toBe(true)
     expect(harness.a.published.at(-1)?.data.phase).toBe('waiting')
     expect(harness.b.published.at(-1)?.data.phase).toBe('tool')
   })

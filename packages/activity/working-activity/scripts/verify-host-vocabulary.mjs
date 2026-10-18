@@ -29,7 +29,7 @@
  *                   (observed: 0.1.0-rc.6, 0.1.2-alpha.2)
  *   attempt-stream  no `assistant/chunk`, but `assistant/attempt` + the live
  *                   `agent/assistant-stream` frame event.
- *                   (observed: 0.1.7-rc.1/rc.2)
+ *                   (observed: 0.1.7-rc.1/rc.2, 0.2.0-rc.2, 0.2.1-rc.2)
  *
  * A tree that matches neither corridor fails: that is the drift alarm for a new
  * Host line, and the fix is to review this table against the new Host, not to

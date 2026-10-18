@@ -21,14 +21,23 @@ import { fileURLToPath } from 'node:url'
 import type { UserConfig } from 'tsdown'
 import { transform } from 'lightningcss'
 
-/** The module specifiers the web shell shares into its frozen module table. */
+/**
+ * The module specifiers the RC2 web shell shares into its frozen module table.
+ *
+ * Source: `@deepseek-ai/dsh-web-frontend@0.2.1-rc.2`
+ * `dist/assets/index-CN7NIWNw.js:190` (`function SZ(){return{...}}`). The 0.1.x
+ * members `dsh-client-web-react`, `dsh-client-ui-attachment` and
+ * `dsh-client-schema-form` are gone from that table; `dsh-client-ui-slots`
+ * survives as a seed only (it is not a dsh-web-app runtime dependency and
+ * declares no `dsh.client` boot row of its own).
+ */
 const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
+  'zod', '@tanstack/react-virtual',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-attachment',
-  '@deepseek-ai/dsh-client-schema-form',
+  '@deepseek-ai/dsh-client-ui-dockkit',
 ] as const
 
 /**

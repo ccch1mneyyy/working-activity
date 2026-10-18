@@ -19,7 +19,7 @@
     ]
   },
   "scripts": {
-    "check": "node --experimental-strip-types --check extensions/index.ts",
+    "check": "npm run typecheck",
     "test": "node --experimental-strip-types --test --test-force-exit tests/index.test.ts",
     "typecheck": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --allowImportingTsExtensions --esModuleInterop --skipLibCheck extensions/index.ts tests/index.test.ts"
   },

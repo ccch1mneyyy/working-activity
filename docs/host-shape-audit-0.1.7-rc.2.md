@@ -2,6 +2,8 @@
 
 **Date:** 2026-09-26 · **Method:** declaration reading + installed-host runtime probes + structural census of real v4 session logs. Read-only except this file.
 
+> **Scope note (historical).** This audit is a snapshot of `dsh-working-activity@0.4.0` against DSH `0.1.7-rc.2`. It is kept as the evidence trail for the 0.1.7 migration; the current package is `0.6.0`, targets DSH `0.2.x`, and the contract changes are summarized in the [RC2 addendum](#addendum-2026-10-19-dsh-02x-rc2) at the end of this file. Read the addendum first for current behavior.
+
 ## Evidence basis (legend)
 
 | Alias | Path |
@@ -96,3 +98,33 @@ Facts about the evidence itself:
 - **Log-census totals are snapshots of live logs.** The sessions were being written while the census ran (run A vs run B differ: e.g. `tool/result` 1575 vs 1751). Ratios and presence/absence are stable; exact event totals are not.
 - **The plugin's own test suite was not executed.** Running it would write caches into the plugin tree, which this audit is not allowed to modify. So the claim in row 41 is a reading of the fixtures and their resolved dependencies, not an observed test result — in particular I did not confirm whether the integration suite currently fails on this machine; on the rc.2 host it *should*, because its `1 工具` assertion depends on the broken `tool/result` path, but it drives the rc.6 loop, so the outcome is not obvious from the outside.
 - **`activity/status` round-trip was not exercised live.** The registration hack (row 21) and the append path (rows 19-20) were verified from declarations plus the installed runtime, not by appending an `activity/status` event in a real session and reloading it.
+
+## Addendum (2026-10-19): DSH 0.2.x RC2
+
+Second evidence pass against DSH `0.2.1-rc.2` (and, for the GUI baseline, `0.2.0-rc.2`). This is a contract summary, not a re-run of the full census above; the live fixtures and gates are the executable evidence.
+
+### Fixed from the 0.1.7 decisions
+
+- **Tool correlation (rows 12-16).** `src/compat/tool-result.ts` reads `message.source.callId` first, then `message.toolCallId`, then the legacy content-block `toolCallId`; failure is the OR of `data.error`, `message.isError`, and a content-block `isError`. Verified by unit tests and the RC2 host fixture.
+- **Streaming deltas (rows 6-7).** `assistant/chunk` remains absent from the durable vocabulary; live output arrives as `agent/assistant-stream` frames (`start` / `chunk` / `end`, carrying `attemptId` and a per-agent `revision`). `src/compat/assistant-stream.ts` consumes them; `assistant/chunk` is still folded structurally when replaying older logs.
+- **`session.events` (row 22).** Removed from the host line. The invariant companion uses `snapshotEvents()` when present and falls back to the `0.1.0-rc.6` `events` accessor.
+- **`tuiPrompt` (row 27).** Still not composed by the current DSH line. The TUI path is the `workingActivity` projection consumed by `dsh-tui`; the `${activity}` prompt slot remains conditional on a host that provides `tuiPrompt`.
+- **Client transport (rows 33-34).** `@deepseek-ai/dsh-client-runtime` and `ConversationSnapshot.activity` are gone from the package. The browser half reads `useProjection('workingActivity')`; `dsh.client.inject` lists only the conversation / renderer / session boot rows (`dsh-client-ui-slots` is a shell seed, not a row).
+
+### New in 0.2.x
+
+| Contract | 0.2.x shape | Package handling |
+| --- | --- | --- |
+| Session projection registration | `key`, `stateSchema`, `stateVersion`, `init(header, inheritedEventCount)`, `apply(state, event)`, optional `wire: { viewSchema, view }` | One definition carries both the new and the legacy spellings (`schema` / `viewSchema` / `view`, zero-arg `init`) |
+| Projection read | `stateOf(session, key)` still exists | Used to overlay live narration and the first-token instant onto the fold |
+| Ignorable plugin records | `SessionEvent.ignorable`, `appendPluginRecord()`, `pluginRecordOf()`, `PluginRecordMap` | `publish: true` writes `plugin:working-activity/status` on 0.2.x; older corridors fall back to `activity/status` + the type-registration shim |
+| Invariant payloads | Legacy and plugin-record spellings coexist | Companion validates both |
+| GUI | Tauri shell embeds the kernel Web client in an iframe; same frozen module table, `conversation.input.dock`, `useProjection` | No GUI-specific client code; peer range covers the kernel Web client's React 18.3.1 and the host's React 19 |
+
+### Version contract
+
+- Peer ranges: DSH host packages and client UI packages `^0.2.0-rc.2` (plus the older corridor ranges); `dsh-invariants` `^0.2.0-rc.2` (no `0.2.1-rc.2` release exists); React `^18.2.0 || ^19.0.0`.
+- `0.2.0-rc.2` and `0.2.1-rc.2` are the same 0.2.x contract line; the GUI `0.22.4` recommended kernel is `0.2.0-rc.2`, and the local active kernel is `0.2.1-rc.2`.
+- Current executable gates: main vitest suite, `test:alpha2`, `test:rc2` (the 0.2.1-rc.2 fixture), `verify:client-bundle`, `verify:gui`, and the publish gates.
+
+Current user-facing contracts live in the [package README](../packages/activity/working-activity/README.md) and [GUI compatibility](gui-compatibility.md).

@@ -8,8 +8,8 @@
  * this module the line has no first-token promotion, no `⏵` narration and no
  * tok/s estimate — it only moves when durable tool events arrive.
  *
- * Measured frame shape (`@deepseek-ai/dsh-agent@0.1.7-rc.2`,
- * `lib/types/runtime-types.d.ts`):
+ * Frame shape (identical on `@deepseek-ai/dsh-agent@0.1.7-rc.2` and the
+ * `0.2.0`/`0.2.1-rc.2` lines, `lib/types/runtime-types.d.ts`):
  *
  * ```text
  * start { attemptId, revision, turn, step }
@@ -18,9 +18,8 @@
  * ```
  *
  * The fields stay read tolerantly rather than through a host type import: the
- * package still compiles against `@deepseek-ai/dsh-agent@0.1.0-rc.6`, which has
- * no `AssistantStreamFrame` declaration at all. Reading structurally is also
- * what keeps the next reshape a one-file fix here.
+ * package must keep loading on corridors that predate `AssistantStreamFrame`.
+ * Reading structurally is also what keeps the next reshape a one-file fix here.
  *
  * ## Why the cursor is keyed by the agent, not by the session
  * `revision` is documented as "monotone within one attached Agent lifecycle;

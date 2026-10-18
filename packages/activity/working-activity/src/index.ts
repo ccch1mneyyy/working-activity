@@ -7,8 +7,10 @@
  *
  * - TUI: registers the `${activity}` prompt slot on `ctx.tuiPrompt` when the
  *   TUI is composed; add `${activity}` to `theme.leftPrompt` to see it.
- * - Session log: appends log-only `activity/status` events (never surface
- *   events) for Web and other UI consumers; replay ignores them.
+ * - Session log (opt-in): appends log-only working-activity snapshots for
+ *   log-replaying consumers. On DSH 0.2.x this uses `appendPluginRecord()`
+ *   (an ignorable `plugin:` record, so resume stays safe); older corridors
+ *   fall back to the legacy `activity/status` event.
  *
  * The state machine itself lives in `./status.ts` (pure, clock-injected); this
  * module only wires events, the render tick, and the two sinks.
@@ -21,6 +23,10 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Session } from '@deepseek-ai/dsh-session'
+// Namespace value import: `appendPluginRecord` is absent from the older host
+// corridors this package still supports, and a named import would fail their
+// ESM link step. A missing property simply degrades to the legacy append.
+import * as dshSession from '@deepseek-ai/dsh-session'
 // Type-only: resolves the agent/status cordis event declaration.
 import type { Agent } from '@deepseek-ai/dsh-agent'
 // Type-only: resolves ctx.systemPrompt for the narration section injection.
@@ -45,13 +51,13 @@ export const name = 'working-activity'
 export type Config = {
   /** Playful copy pool; false renders plain functional labels. */
   phrases?: boolean
-  /** Append `activity/status` session events for UI consumers. Default OFF:
-   *  dsh-session's append() cannot mark events ignorable, and the resume
-   *  read path refuses logs containing unknown non-ignorable types — every
-   *  appended snapshot makes the whole session unresumable. Re-enable only
-   *  for a log-replaying consumer on a harness that supports ignorable
-   *  appends. The live status line (prompt slot / session events) is
-   *  unaffected by this flag. */
+  /** Append working-activity snapshots for log-replaying UI consumers.
+   *  Default OFF. On DSH 0.2.x the snapshot is written through
+   *  `appendPluginRecord()` as an ignorable `plugin:working-activity/status`
+   *  record, so resuming the session stays safe. Older corridors fall back to
+   *  the legacy `activity/status` event, which their resume path may refuse —
+   *  keep this off there unless the consumer supports it. The live status line
+   *  (TUI slot / Web projection) is unaffected by this flag. */
   publish?: boolean
   /** Status render tick interval in ms. */
   tickMs?: number
@@ -381,6 +387,17 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
   }
 
+  /**
+   * Durable-record sink available on the current host line.
+   *
+   * `appendPluginRecord` was added on DSH 0.2.x; older corridors export no
+   * such function and are detected structurally (the namespace property is
+   * missing), so one build serves both.
+   */
+  type PluginRecordAppender = (session: Session, type: string, data: unknown) => unknown
+  const appendPluginRecord = (dshSession as { appendPluginRecord?: PluginRecordAppender }).appendPluginRecord
+  const PLUGIN_RECORD_TYPE = 'plugin:working-activity/status'
+
   /** Publish one rendered snapshot: TUI slot update + throttled session event. */
   const publish = (runtime: SessionRuntime, state: ActivityState): void => {
     queueMicrotask(() => {
@@ -409,7 +426,11 @@ export function apply(ctx: Context, config: Config = {}): void {
         ...(state.phrase === undefined ? {} : { phrase: state.phrase }),
       }
       try {
-        runtime.session.append('activity/status', payload)
+        if (appendPluginRecord !== undefined) {
+          appendPluginRecord(runtime.session, PLUGIN_RECORD_TYPE, payload)
+        } else {
+          runtime.session.append('activity/status', payload)
+        }
         runtime.lastPublishedLine = state.line
         runtime.lastPublishedPhase = state.phase
         runtime.lastPublishAt = nowMs
@@ -435,9 +456,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   // event this plugin used to fold is gone — streamed deltas arrive as
   // transient `agent/assistant-stream` frames instead — so the realtime half of
   // the line (first-token promotion, `⏵` narration, tok/s) rides on these
-  // frames. Subscribed through a cast because the declared dev baseline
-  // (`@deepseek-ai/dsh-agent@0.1.0-rc.6`) predates the event; on that corridor
-  // the subscription simply never fires and the durable path above still runs.
+  // frames. Subscribed through a cast so the one build still loads on older
+  // corridors, where the event never fires and the durable path above carries
+  // the line.
   // The cursor that orders frames lives with the emitting agent, so a replaced
   // agent (whose revision restarts at 1) is never mistaken for a stale one.
   ctx.on('agent/assistant-stream' as never, (({ agent, frame }: { agent: Agent; frame: unknown }) => {

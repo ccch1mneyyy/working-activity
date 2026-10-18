@@ -1,9 +1,9 @@
 /**
- * Session-projection transport spike — DSH `0.1.7-rc.2` host, no browser.
+ * Session-projection transport spike — DSH `0.2.1-rc.2` host, no browser.
  *
  * The migration this spike decides: the Web surface used to receive its data
  * through a patch to `@deepseek-ai/dsh-client-runtime` (frozen at `0.1.1-rc.2`,
- * absent from the `0.1.7-rc.2` host line). The replacement candidate is a
+ * absent from the current host line). The replacement candidate is a
  * HOST-REGISTERED session projection with a wire view:
  *
  * ```ts
@@ -13,19 +13,24 @@
  * })
  * ```
  *
- * which the browser would read with `useProjection('workingActivity')`.
+ * where `init(header, inheritedEventCount)` seeds the fold from the Session's
+ * immutable metadata and its exact fork-inherited prefix length, and the
+ * browser reads the registered unit with `useProjection('workingActivity')`.
  *
  * Four claims, each with a real assertion over the real host:
  *
- * 1. the registration API of `@deepseek-ai/dsh-session-projection@0.1.7-rc.2`
+ * 1. the registration API of `@deepseek-ai/dsh-session-projection@0.2.1-rc.2`
  *    accepts a keyed definition with `init`/`apply`/`stateVersion` and a `wire`
- *    view, and the registration is fiber-owned;
+ *    view, seeds `init` with `(header, inheritedEventCount)`, and the
+ *    registration is fiber-owned;
  * 2. `apply` really folds committed durable events, and the folded value is
  *    readable through the supported host-side API (`stateOf`);
  * 3. registering and driving that unit appends NOTHING to the session log —
  *    checked differentially against an identical turn with no unit registered
  *    (the past incident, issue #153, was the plugin APPENDING `activity/status`
- *    rows into the shared log);
+ *    rows into the shared log; on 0.2.x `publish: true` writes an ignorable
+ *    `plugin:working-activity/status` record instead, which the non-vacuity
+ *    control below observes as a real log append);
  * 4. the wire view the client carrier would ship is produced host-side by
  *    `snapshot()` and by the `onChanged` feed, and the declared `viewSchema` /
  *    `stateSchema` are actually enforced on that path.
@@ -41,7 +46,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { KNOWN_SESSION_EVENT_TYPES, SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { KNOWN_SESSION_EVENT_TYPES, SessionId, SessionLogOffset, pluginRecordOf, type Session, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 // Type-only: loads the `ctx.sessionProjections` Context merge and the
 // ProjectionDefinition / SessionProjectionMap contract this file registers
 // against (`dsh-session-projection/lib/types/index.d.ts`).
@@ -99,6 +104,8 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
 const SPIKE_KEY = 'workingActivitySpike'
 /** Negative-control key: proves `viewSchema` is enforced, not decorative. */
 const BAD_WIRE_KEY = 'workingActivitySpikeBadWire'
+/** Ignorable plugin-record type the plugin's `publish: true` sink writes on 0.2.x. */
+const PLUGIN_STATUS_RECORD_TYPE = 'plugin:working-activity/status'
 /** Call id the scripted tool call and its result share. */
 const CALL_ID = 'rc2-spike-call-1'
 /** State version of the spike unit (a non-negative integer is enforced at register time). */
@@ -212,6 +219,16 @@ function scriptToolTurn(ctx: Context): void {
 }
 
 /**
+ * Arguments the host handed to the last `init` call.
+ *
+ * The 0.2.x definition contract seeds a fold with `(header, inheritedEventCount)`
+ * — the immutable Session metadata and the exact fork-inherited prefix length.
+ * Capturing them proves the host calls the declared signature, not just that it
+ * type-checks.
+ */
+let lastInit: { readonly header: SessionHeader; readonly inheritedEventCount: SessionLogOffset } | undefined
+
+/**
  * Register the spike unit exactly as the declared shape documents it.
  *
  * Mirrors `dsh-session-projection/lib/types/index.d.ts:38-80`
@@ -220,6 +237,7 @@ function scriptToolTurn(ctx: Context): void {
  * @returns the exact disposer `register()` hands back.
  */
 function registerSpikeUnit(ctx: Context): () => void {
+  lastInit = undefined
   return ctx.sessionProjections.register({
     key: SPIKE_KEY,
     // Validates persisted state before it seeds a fold.
@@ -230,8 +248,11 @@ function registerSpikeUnit(ctx: Context): () => void {
       lastSeq: z.number(),
     }),
     stateVersion: SPIKE_STATE_VERSION,
-    // State for the empty log.
-    init: () => ZERO_STATE,
+    // State for the empty log, seeded from the Session's own metadata.
+    init: (header: SessionHeader, inheritedEventCount: SessionLogOffset) => {
+      lastInit = { header, inheritedEventCount }
+      return ZERO_STATE
+    },
     // Pure transition; an uninterested event MUST return the same reference.
     apply: (state, event) => {
       switch (event.type) {
@@ -321,7 +342,8 @@ async function runSpikeTurn(ctx: Context, options: SpikeTurnOptions): Promise<Sp
     })
   }
   if (options.plugin === true) await ctx.plugin(WorkingActivity, {})
-  // The legacy sink: the exact configuration that caused issue #153.
+  // The publish sink: the configuration that caused issue #153. On 0.2.x it
+  // appends an ignorable `plugin:` record instead of a legacy log event.
   if (options.pluginPublish === true) await ctx.plugin(WorkingActivity, { publish: true, lang: 'zh' })
   // The supported post-commit feed. `session.events` does not exist on this
   // host line and `snapshotEvents()` is marked "new calls are prohibited", so
@@ -382,7 +404,7 @@ function distinct(types: readonly string[]): string[] {
   return [...new Set(types)].sort()
 }
 
-describe('session projection with a wire view on DSH 0.1.7-rc.2 (no browser)', () => {
+describe('session projection with a wire view on DSH 0.2.1-rc.2 (no browser)', () => {
   // -------------------------------------------------------------------------
   // Claim 1 — the registration API works on the real host.
   // -------------------------------------------------------------------------
@@ -404,6 +426,24 @@ describe('session projection with a wire view on DSH 0.1.7-rc.2 (no browser)', (
       // cell from `init` on `session/created` (lib/index.js:53-63).
       const init = registry.stateOf(session, SPIKE_KEY)
       console.log(`[spike 1] stateOf() right after create(): ${JSON.stringify(init)}`)
+      // 0.2.x init contract: the registry hands the fold the Session's
+      // immutable header and its exact fork-inherited prefix length.
+      console.log(`[spike 1] init(header, inheritedEventCount) = `
+        + `(${String(lastInit?.header.id)}, ${String(lastInit?.inheritedEventCount)})`)
+      expect(lastInit?.header).toBe(session.header)
+      expect(lastInit?.inheritedEventCount).toBe(0)
+
+      // The same signature receives a caller-supplied inherited count on the
+      // cold read path: a fork child's prefix length, with no usable checkpoint.
+      const restored = registry.restore({}, [], SessionLogOffset(0), session.header, SessionLogOffset(3))
+      console.log(`[spike 1] restore() with inheritedEventCount=3 → `
+        + `lastInit.inheritedEventCount=${String(lastInit?.inheritedEventCount)} `
+        + `value=${JSON.stringify(restored.snapshot.values[SPIKE_KEY])}`)
+      expect(lastInit?.inheritedEventCount).toBe(3)
+      expect(restored.snapshot.asOfSeq).toBe(-1)
+      expect(restored.snapshot.values[SPIKE_KEY]).toEqual({
+        phase: 'waiting', turnStarts: 0, turnEnds: 0, toolCalls: 0, asOfSeq: -1,
+      })
       // The same seat already carries the HOST's own client-visible units: this
       // is a first-class framework seam, not a plugin-private channel.
       console.log(`[spike 1] snapshot() keys while registered: ${JSON.stringify(Object.keys(registry.snapshot(session).values).sort())}`)
@@ -640,15 +680,19 @@ describe('session projection with a wire view on DSH 0.1.7-rc.2 (no browser)', (
     const ctx = new Context()
     try {
       const turn = await runSpikeTurn(ctx, { sessionId: 'rc2-spike-plugin', plugin: true })
+      const publishRecords = turn.durable.filter(event => pluginRecordOf(event)?.type === PLUGIN_STATUS_RECORD_TYPE)
       console.log(`[spike 3b] durable types with the plugin mounted at DEFAULT config: ${JSON.stringify(turn.durableTypes)}`)
-      console.log(`[spike 3b] activity/status rows in the log: ${turn.durableTypes.filter(t => t === 'activity/status').length}`)
+      console.log(`[spike 3b] legacy activity/status rows in the log: ${turn.durableTypes.filter(t => t === 'activity/status').length}`)
+      console.log(`[spike 3b] plugin:working-activity/status records in the log: ${publishRecords.length}`)
       console.log(`[spike 3b] stateOf() = ${JSON.stringify(ctx.sessionProjections.stateOf(turn.session, SPIKE_KEY))}`)
 
-      // The plugin still REGISTERS its log-only event type at load
-      // (`registerActivityEventType()`), but with `publish` at its default
-      // (false) it never WRITES one: vocabulary knowledge is not a log append.
+      // The plugin still REGISTERS its legacy log-only event type at load
+      // (`registerActivityEventType()`) so old logs replay, but with `publish`
+      // at its default (false) it never WRITES anything: vocabulary knowledge
+      // is not a log append, on either the legacy event or the RC2 record.
       expect(KNOWN_SESSION_EVENT_TYPES.has('activity/status')).toBe(true)
       expect(turn.durableTypes).not.toContain('activity/status')
+      expect(publishRecords).toEqual([])
       expect(turn.durableTypes.filter(type => /projection|activity|spike/i.test(type))).toEqual([])
       expect(ctx.sessionProjections.stateOf(turn.session, SPIKE_KEY)?.toolCalls).toBe(1)
     } finally {
@@ -656,24 +700,36 @@ describe('session projection with a wire view on DSH 0.1.7-rc.2 (no browser)', (
     }
   })
 
-  it('CLAIM 3c (NON-VACUITY CONTROL): the legacy publish:true sink DOES dirty the log', async () => {
+  it('CLAIM 3c (NON-VACUITY CONTROL): publish:true DOES dirty the log — as an ignorable plugin record', async () => {
     const ctx = new Context()
     try {
-      const turn = await runSpikeTurn(ctx, { sessionId: 'rc2-spike-legacy-publish', pluginPublish: true })
+      const turn = await runSpikeTurn(ctx, { sessionId: 'rc2-spike-publish', pluginPublish: true })
       const statusRows = turn.durableTypes.filter(type => type === 'activity/status')
-      const appended = turn.durable.filter(event => (event.type as string) === 'activity/status')
+      const recordEvents = turn.durable.filter(event => pluginRecordOf(event)?.type === PLUGIN_STATUS_RECORD_TYPE)
       console.log(`[spike 3c] durable types with publish:true: ${JSON.stringify(turn.durableTypes)}`)
-      console.log(`[spike 3c] activity/status rows appended: ${statusRows.length}`)
-      console.log(`[spike 3c] activity/status seqs: ${JSON.stringify(appended.map(event => event.seq))}`)
+      console.log(`[spike 3c] legacy activity/status rows: ${statusRows.length}`)
+      console.log(`[spike 3c] ignorable plugin records: ${recordEvents.length} `
+        + `seqs=${JSON.stringify(recordEvents.map(event => event.seq))}`)
+      console.log(`[spike 3c] record payloads: ${JSON.stringify(recordEvents.map(event => pluginRecordOf(event)?.data))}`)
 
-      // This is the failure mode issue #153 was: the OLD transport writes into
-      // the shared log. Asserting it HERE proves claim 3's negative result is
-      // not vacuous — the very same recorder observes appended rows.
-      expect(statusRows.length).toBeGreaterThan(0)
+      // On 0.2.x the publish sink no longer writes the legacy event...
+      expect(statusRows).toHaveLength(0)
+      // ...it writes an ignorable `plugin:` record instead. That is still a
+      // log write, so claim 3's negative result is not vacuous: the very same
+      // recorder observes appended rows.
+      expect(recordEvents.length).toBeGreaterThan(0)
+      for (const event of recordEvents) {
+        expect(event.ignorable).toBe(true)
+        expect(KNOWN_SESSION_EVENT_TYPES.has(event.type)).toBe(false)
+        const record = pluginRecordOf(event)
+        expect(record?.type).toBe(PLUGIN_STATUS_RECORD_TYPE)
+        // The record payload is the published snapshot itself.
+        expect(typeof (record?.data as { line?: unknown }).line).toBe('string')
+      }
       // ...and those rows are exactly what claim 3's pattern filter rejects.
       expect(turn.durableTypes.filter(type => /projection|activity|spike/i.test(type)).length)
         .toBeGreaterThan(0)
-      // The projection itself still folds correctly alongside the legacy sink.
+      // The projection itself still folds correctly alongside the publish sink.
       expect(ctx.sessionProjections.stateOf(turn.session, SPIKE_KEY)?.toolCalls).toBe(1)
     } finally {
       await ctx.fiber.dispose()
