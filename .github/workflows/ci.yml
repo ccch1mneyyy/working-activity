@@ -47,8 +47,6 @@ jobs:
       # exports NODE_ENV=production.
       - name: Install dev dependencies
         run: npm install --include=dev --no-audit --no-fund --no-package-lock
-      - name: Syntax check
-        run: npm run check
       - name: Typecheck
         run: npm run typecheck
       # `npm test` is `node --experimental-strip-types --test tests/index.test.ts`

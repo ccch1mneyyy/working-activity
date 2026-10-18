@@ -343,7 +343,7 @@ pi install npm:pi-working-activity
 ## 开发
 
 ```sh
-npm run check       # 语法检查（node --experimental-strip-types）
+npm run check       # 语法/类型检查（npm run typecheck 的别名）
 npm run typecheck   # TypeScript 类型检查
 npm test            # 测试
 ```

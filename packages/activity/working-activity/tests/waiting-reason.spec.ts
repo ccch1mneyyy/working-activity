@@ -133,8 +133,10 @@ describe('one render, one clock', () => {
     // copy pools must follow the RENDER instant (one render, one time
     // source); before, night/holiday copy read the clock supplier while the
     // elapsed read the argument, so the two disagreed.
-    const noon = Date.parse('2026-03-16T12:00:00+08:00')
-    const night = Date.parse('2026-03-16T03:00:00+08:00')
+    // Local-time constructors, not a fixed +08:00 offset: the tracker reads
+    // `Date.getHours()`, so a fixed offset would be daytime on a UTC runner.
+    const noon = new Date(2026, 2, 16, 12, 0, 0).getTime()
+    const night = new Date(2026, 2, 16, 3, 0, 0).getTime()
     const nightPool = new Set<string>(NIGHT_PHRASES)
     let found = false
     for (let seed = 0; seed < 400 && !found; seed++) {
