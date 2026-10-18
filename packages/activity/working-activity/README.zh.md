@@ -43,8 +43,9 @@ DeepSeek Harness（DSH）的实时工作状态行插件。agent 工作期间，�
 
 - **相位感知的状态行。** 状态行按 `waiting` → `thinking` → `tool` → `done` 移动。每个相位有独立的文案池、轮换节奏与耗时格式；已结算的相位展示固定的收尾摘要，而不是继续计数的计时器。
 - **真实的工具活动。** 运行中的工具渲染为*动词 + 参数细节 + 已耗时*（`跑个命令 npm test · 12s`）。结果与调用按精确 call id 配对；失败的工具使用失败文案并带 `✗` 标记。
-- **回合摘要。** `turn/end` 后状态行变为 `搞定 ✓ · 4 工具 · 想12s 干11s`——完成工具数、思考耗时与干活耗时——并短暂钉住最后一个工具的片段。
-- **紧凑 HUD。** 状态行末尾拼接一组会话运行事实：上下文压力（`ctx 62%`，达到警告阈值加 `⚠`，危险阈值加 `⛔`）、待办进度（`2/5 待办`）、后台任务、直接子代理或 Agent Team 成员、持久目标轮次、计划模式、排队输入，以及收尾时的本回合 token 总量。每个信号都可单独开关；宿主没有发布该信号时直接不渲染。
+- **回合摘要。** `turn/end` 后状态行变为 `搞定 ✓ · 4 工具 · 总1m23s · 想12s 干11s`——完成工具数、思考耗时与干活耗时——并短暂钉住最后一个工具的片段。
+- **任务级总用时。** `总` 计时的是整轮任务，不是当前这条消息回合。用户在一次回合进行中插话时，下一条 next-turn 输入会留在队列里，任务跨回合继续；回合结束时队列为空才结束任务，下一条消息开启新任务。done 摘要里的工具数、思考/干活耗时与 token 也按任务聚合。任务边界依赖 `agent/inbox/spliced`（`0.1.7+`）；更早的宿主没有该信号时退回按回合计时。
+- **紧凑 HUD。** 状态行末尾拼接一组会话运行事实：上下文压力（`ctx 62%`，达到警告阈值加 `⚠`，危险阈值加 `⛔`）、待办进度（`2/5 待办`）、后台任务、直接子代理或 Agent Team 成员、持久目标轮次、计划模式、排队输入。每个信号都可单独开关；宿主没有发布该信号时直接不渲染。
 - **实时自述。** `narrate` 默认开启：插件注入一条简短的系统提示词约定，要求模型在每个步骤开始时写一行 `⏵ …`。该行实时显示在状态行中，持久消息里仍然保留它。
 - **双语、按特性开关的文案。** 中英文案池、日间/深夜变体、长思考分档、周末与节假日文案、稀有彩蛋、工具连击、模型切换梗与失败文案都可独立开关。`phrases: false` 或 `mode: minimal` 渲染朴素功能标签。
 - **构造上无侵入。** 插件不注册工具、不追加 surface 事件、不进入派生的模型历史。它唯一可能影响提示词的部分是可选的自述约定。
@@ -70,7 +71,7 @@ tracker 渲染一行纯文本，并通过两条通道对外提供同一个值：
 | `waiting` | 回合已开启，模型尚未产出 token | `等待模型响应 · 总3s` |
 | `thinking` | 收到实时 token 或 reasoning 增量 | `嗯…让我捋捋 · 总12s` |
 | `tool` | 有 `tool/call` 尚未收到结果 | `跑个命令 npm test · 12s` |
-| `done` | 回合已结束 | `搞定 ✓ · 4 工具 · 想12s 干11s` |
+| `done` | 回合已结束 | `搞定 ✓ · 4 工具 · 总1m23s · 想12s 干11s` |
 | `idle` | 没有进行中的回合 | *（不渲染）* |
 
 ## 环境要求
@@ -190,9 +191,9 @@ GUI 侧的要求与 Web UI 相同：组合上文三个 boot row，并让 shell �
 
 `features` 接受且由 tracker 实际生效的特性开关：
 
-`phrases`、`rareEggs`、`nightPhrases`、`weekend`、`holidays`、`combo`、`failPhrases`、`modelQuips`、`continuePhrases`、`context`、`todos`、`jobs`、`subagents`、`team`、`goal`、`plan`、`queue`、`tokens`。
+`phrases`、`rareEggs`、`nightPhrases`、`weekend`、`holidays`、`combo`、`failPhrases`、`modelQuips`、`continuePhrases`、`context`、`todos`、`jobs`、`subagents`、`team`、`goal`、`plan`、`queue`。
 
-HUD 开关在 `lively` 模式下默认开启。`minimal` 保留 `context`（告警属于功能信息），其余默认关闭，除非在 `features` 里显式打开。后缀最多四个徽章（`done` 时五个），按操作优先级排序：context、jobs、todos、team/subagents、goal、plan、queue、tokens。
+HUD 开关在 `lively` 模式下默认开启。`minimal` 保留 `context`（告警属于功能信息），其余默认关闭，除非在 `features` 里显式打开。后缀最多四个徽章（`done` 时五个），按操作优先级排序：context、jobs、todos、team/subagents、goal、plan、queue。
 
 ## 投影契约
 
@@ -225,13 +226,14 @@ interface WorkingActivityView {
   toolCount: number       // 本回合已完成的工具数
   phaseStartedAt: number  // 当前相位开始的 epoch 毫秒
   toolStartedAt?: number  // 当前展示的（最旧）工具开始的 epoch 毫秒
+  taskStartedAt?: number  // 当前任务开始的 epoch 毫秒（跨用户插话）
   turnStartedAt: number   // 当前回合开始的 epoch 毫秒（idle 时为 0）
   updatedAt: number       // 最后一次折叠事件的时间戳
   lang: 'zh' | 'en'       // 渲染 line 时使用的语言
 }
 ```
 
-投影是事件驱动的，两次折叠之间 `line` 可能落后于墙钟。值里带有时间戳，客户端可以据此只重算那个会动的片段；Web 与 GUI 半边正是这样做的，片段形状无法识别时则回退到宿主原文。tool 相位单独暴露 `toolStartedAt`：展示的是最旧的活跃工具，而并发工具到达时 `phaseStartedAt` 可能已经前移。
+投影是事件驱动的，两次折叠之间 `line` 可能落后于墙钟。值里带有时间戳，客户端可以据此只重算那个会动的片段；Web 与 GUI 半边正是这样做的，片段形状无法识别时则回退到宿主原文。tool 相位单独暴露 `toolStartedAt`：展示的是最旧的活跃工具，而并发工具到达时 `phaseStartedAt` 可能已经前移。非 tool 相位的 `总` 从 `taskStartedAt` 计时；`turnStartedAt` 仍是当前回合的开始，用于回合级指标。
 
 当连续两次读取的字段完全相同时，`view` 会复用上一个 wire 对象。RC2 注册表用 `Object.is` 比较相邻 view 结果；复用引用正是抑制“内部状态变化但展示值没变”时多余广播的机制。
 

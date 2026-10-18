@@ -76,3 +76,16 @@ describe('concurrent tool anchor', () => {
     expect(refreshElapsedSuffix(line, value, BASE + 2_000)).toBe('跑命令 sleep 10 · 12s')
   })
 })
+
+describe('task anchor', () => {
+  it('counts thinking/waiting elapsed from the task start, not the turn start', () => {
+    const line = '盘一下 · 总5s'
+    const value = view({
+      phase: 'thinking',
+      turnStartedAt: BASE - 5_000,
+      taskStartedAt: BASE - 10_000,
+    })
+    // An interjection opened a second turn, but the task started 10s ago.
+    expect(refreshElapsedSuffix(line, value, BASE)).toBe('盘一下 · 总10s')
+  })
+})

@@ -226,6 +226,27 @@ describe('projection folding', () => {
     expect(value.phaseStartedAt).toBe(START + 5_000)
   })
 
+  it('keeps the task anchor across a queued interjection', () => {
+    const { projection, tick, at } = build()
+    let state = projection.apply(projection.init(), event('turn/start', START, { turn: 1 }))
+    tick(1_000)
+    state = projection.apply(state, event('agent/inbox/spliced', at(), {
+      target: 'next-turn', start: 0, removedCount: 0, inserted: [{ id: 'm1' }],
+    }))
+    tick(1_000)
+    state = projection.apply(state, event('turn/end', at(), { turn: 1, reason: { kind: 'completed' } }))
+    tick(2_000)
+    state = projection.apply(state, event('turn/start', at(), { turn: 2 }))
+    state = projection.apply(state, event('agent/inbox/spliced', at(), {
+      target: 'next-turn', start: 0, removedCount: 1, inserted: [],
+    }))
+    tick(1_000)
+    state = projection.apply(state, event('turn/end', at(), { turn: 2, reason: { kind: 'completed' } }))
+    const value = projection.view(state) as WorkingActivityView
+    expect(value.taskStartedAt).toBe(START)
+    expect(value.line).toContain('总5s')
+  })
+
   it('carries the language through to the client', () => {
     let current = START
     const projection = createActivityProjection({

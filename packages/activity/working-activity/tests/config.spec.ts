@@ -93,7 +93,7 @@ describe('featureOn', () => {
     expect(FEATURE_FLAGS).not.toContain('cost')
     expect(FEATURE_FLAGS).not.toContain('shimmer')
     // The DSH HUD switches are real: every one must reach the tracker gate.
-    for (const flag of ['context', 'todos', 'jobs', 'subagents', 'team', 'goal', 'plan', 'queue', 'tokens'] as const) {
+    for (const flag of ['context', 'todos', 'jobs', 'subagents', 'team', 'goal', 'plan', 'queue'] as const) {
       expect(FEATURE_FLAGS).toContain(flag)
     }
   })

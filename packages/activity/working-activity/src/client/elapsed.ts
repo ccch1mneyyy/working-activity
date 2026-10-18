@@ -27,6 +27,8 @@ export interface ElapsedTickView {
   readonly phaseStartedAt: number
   /** Wall clock the displayed tool started, when it differs from the phase start. */
   readonly toolStartedAt?: number
+  /** Wall clock the current task started (spans user interjections). */
+  readonly taskStartedAt?: number
   /** Wall clock the current turn began (the elapsed counter counts from it). */
   readonly turnStartedAt: number
   /** Language the host rendered `line` in. */
@@ -74,7 +76,7 @@ export function refreshElapsedSuffix(line: string, view: ElapsedTickView, nowMs:
   // overlap — a display nuance, not a wrong number.
   const since = view.phase === 'tool'
     ? (view.toolStartedAt ?? view.phaseStartedAt)
-    : view.turnStartedAt
+    : (view.taskStartedAt ?? view.turnStartedAt)
   if (!(since > 0)) return line
   const elapsed = Math.max(0, nowMs - since)
   const replacement = view.phase === 'tool'
