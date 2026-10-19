@@ -740,6 +740,25 @@ function short(s: string, n = 48): string {
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const STAGE_PATTERN = /^(?:step|stage|phase|downloading|uploading|building|testing|installing|fetching|compiling|rendering|deploying|processing|extracting|loading|waiting|步骤|阶段|下载|上传|构建|测试|安装|拉取|编译|渲染|部署|处理|解压|加载|等待)(?:\b|[：:\s]|$)/i;
 
+/**
+ * 从最近流式文本中提取最新一条模型自述。
+ * pi 某些场景会把多条「⏵ ...」流到同一行；后一个 ⏵ 必须视为新边界，
+ * 否则状态栏会把历史自述串成长文本。
+ */
+function extractLatestNarratedStatus(text: string): string | null {
+	const clean = text.replace(ANSI_PATTERN, "");
+	const matches = [...clean.matchAll(/⏵[ \t\u00a0]*/g)];
+	const last = matches.at(-1);
+	if (!last || last.index == null) return null;
+
+	let status = clean.slice(last.index + last[0].length);
+	const lineEnd = status.search(/[\r\n]/);
+	if (lineEnd >= 0) status = status.slice(0, lineEnd);
+	const nextMarker = status.indexOf("⏵");
+	if (nextMarker >= 0) status = status.slice(0, nextMarker);
+	return status.trim() || null;
+}
+
 function asPercent(value: unknown): string | null {
 	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
 	const percent = value <= 1 ? value * 100 : value;
@@ -1063,6 +1082,7 @@ type ActiveTool = {
 type DoneItem = { label: string; isError: boolean };
 
 export const __testing = {
+	extractLatestNarratedStatus,
 	extractToolProgress,
 	fmtCost,
 	fmtTokens,
@@ -1813,19 +1833,11 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (!config.narrate || !delta) return; // 开关关：不解析自述
 			recentText = (recentText + delta).slice(-2000);
-			// 提取最新的 ⏵ 状态行
-			const lines = recentText.split("\n");
-			for (let i = lines.length - 1; i >= Math.max(0, lines.length - 6); i--) {
-				const line = lines[i]!.trim();
-				if (line.startsWith("⏵ ")) {
-					const status = line.slice(2).trim();
-					if (status && status !== narratedStatus) {
-						narratedStatus = status;
-						narratedAtMs = Date.now();
-						dbg("narrate", { status });
-					}
-					break;
-				}
+			const status = extractLatestNarratedStatus(recentText);
+			if (status && status !== narratedStatus) {
+				narratedStatus = status;
+				narratedAtMs = Date.now();
+				dbg("narrate", { status });
 			}
 		} else if (evt.type === "thinking_delta") {
 			firstTokenSeen = true;

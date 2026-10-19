@@ -85,6 +85,18 @@ test("tool progress extracts structured, percentage, and stage updates", () => {
 	assert.equal(__testing.extractToolProgress({ content: [{ type: "text", text: "ordinary output" }] }), null);
 });
 
+test("narrate extracts only the latest concatenated status marker", () => {
+	assert.equal(
+		__testing.extractLatestNarratedStatus("⏵ 读取方案与仓库现状⏵ 并行核验关键假设⏵ 核对文档执行规范"),
+		"核对文档执行规范",
+	);
+	assert.equal(
+		__testing.extractLatestNarratedStatus("前文\n⏵ 读完剩余测试再动手\n正文\n⏵ 确认两处测试依赖细节"),
+		"确认两处测试依赖细节",
+	);
+	assert.equal(__testing.extractLatestNarratedStatus("没有状态标记"), null);
+});
+
 test("danger threshold never remains below warning threshold", () => {
 	assert.deepEqual(
 		__testing.normalizeThresholds({ frames: "moon", contextWarnAt: 96, contextDangerAt: 90 }),
@@ -226,4 +238,6 @@ test("session_compact flashes compaction notice with token savings", async () =>
 	assert.match(text, /12\.0k/);
 	// contextWarnPct 应被重置
 	assert.equal(state.notifications.some((n) => n.includes("上下文")), false);
+
+	await harness.emit("session_shutdown", {}, ctx);
 });
